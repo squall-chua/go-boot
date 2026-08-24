@@ -1,0 +1,8 @@
+log:
+  level: info
+  format: text
+http:
+  addr: ":8080"
+actuator:
+  addr: ":9090"
+greeting: "hi"

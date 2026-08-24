@@ -1,0 +1,13 @@
+log:
+  level: info
+  format: json
+http:
+  addr: ":8080"
+actuator:
+  addr: ":9090"
+grpc:
+  addr: ":8081"
+db:
+  dsn: "postgres://goboot:goboot@localhost:5432/goboot?sslmode=disable"
+  maxopenconns: 10
+  migrateonstart: true
