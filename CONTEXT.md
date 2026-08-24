@@ -24,9 +24,17 @@ phases: **Start**, which returns once it is ready; **Drain**, which stops it tak
 is optional; and **Stop**.
 _Avoid_: bean, service, runnable
 
+**Check**:
+A readiness test a Component offers, written as `Check(ctx) error`. The Actuator collects every
+Component's Check when it starts and runs them all on each request to `/readyz`. A Check **must
+respect its context**: it runs synchronously inside the probe's own deadline, so one that ignores
+cancellation blocks a goroutine on every probe. Liveness never runs Checks, because a liveness test
+that touches a dependency turns a database outage into a restart loop.
+_Avoid_: health indicator, probe (collides with the Kubernetes probe that calls it), healthcheck
+
 **Tier**:
 The rank a Component declares to fix when it starts. There are three, in start order: Observe
-(the Actuator), Resource (the database pool) and Transport (HTTP, gRPC, message consumers).
+(the Actuator and tracing), Resource (the database pool) and Transport (HTTP, gRPC, message consumers).
 Start runs from the lowest Tier to the highest. Drain runs in the same order; Stop runs the
 reverse. Because a Component declares its own Tier, the wiring in `main` cannot put them in the
 wrong order.
