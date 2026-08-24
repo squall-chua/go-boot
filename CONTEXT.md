@@ -32,6 +32,11 @@ reverse. Because a Component declares its own Tier, the wiring in `main` cannot 
 wrong order.
 _Avoid_: layer (collides with Service Layer), phase (means Start, Drain or Stop), priority, stage
 
+**Profile**:
+A named set of config overrides, chosen at startup, that layers a second file over the base one —
+`app.yaml` and then `app-local.yaml`. The name is borrowed from Spring Boot.
+_Avoid_: environment (collides with environment variables), stage, mode
+
 ### The service shape
 
 **Transport**:
