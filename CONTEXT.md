@@ -9,7 +9,7 @@ short `main`, but with plain Go wiring instead of reflection.
 ### The pieces
 
 **Starter**:
-A subpackage of go-boot providing one capability with sane defaults, such as `goboot/http`
+A subpackage of go-boot providing one capability with sane defaults, such as `goboot/web`
 or `goboot/db`. The name is borrowed from Spring Boot.
 _Avoid_: module (collides with Go modules — go-boot ships as one Go module), package, plugin
 
