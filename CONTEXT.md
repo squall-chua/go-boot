@@ -10,7 +10,9 @@ short `main`, but with plain Go wiring instead of reflection.
 
 **Starter**:
 A subpackage of go-boot providing one capability with sane defaults, such as `goboot/web`
-or `goboot/db`. The name is borrowed from Spring Boot.
+or `goboot/db`. The name is borrowed from Spring Boot. A Starter may split a dependency that
+only some of its users need into a subpackage of its own, because Go links by import: a
+dependency named in the parent package is paid for by everyone who imports it.
 _Avoid_: module (collides with Go modules — go-boot ships as one Go module), package, plugin
 
 **Preset**:
@@ -49,7 +51,8 @@ _Avoid_: environment (collides with environment variables), stage, mode
 
 **Transport**:
 A protocol front end that exposes the Service Layer to callers. go-boot v1 has two: HTTP
-and gRPC. They are independent — neither is generated from the other.
+and gRPC. They are independent — neither is generated from the other — but they share one
+listener.
 _Avoid_: door, adapter, endpoint, protocol
 
 **Service Layer**:
