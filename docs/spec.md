@@ -1661,10 +1661,14 @@ Written down as gaps, not left out.
   interceptor**, and #12 measured what that costs: a bare `error` reaches the caller verbatim,
   password and all. [#38](https://github.com/squall-chua/go-boot/issues/38) tried to close it with
   a `grpc.Handle` that carried the options, and refused every shape of it: none is both shorter
-  than the raw mount and compile-checked, and one that is longer is one nobody reaches for. The gap
-  stands. What #38 did close is the larger half nobody had measured — the adapter this spec printed
-  leaked the same string **with the interceptor correctly wired**, because it wrapped the raw error
-  in a `*connect.Error`. ([4.0](#40-the-error-convention-every-starter-follows))
+  than the raw mount and compile-checked, and one that is longer is one nobody reaches for.
+  [#42](https://github.com/squall-chua/go-boot/issues/42) closed as `wontfix` on that record: the
+  gap stands until connect gains server-level handler options, or Go's inference accepts an
+  argument assignable to a type parameter an earlier argument already bound. Both were re-checked
+  against connect `v1.20.0` and Go 1.26 and neither holds. What #38 did close is the larger half
+  nobody had measured — the adapter this spec printed leaked the same string **with the interceptor
+  correctly wired**, because it wrapped the raw error in a `*connect.Error`.
+  ([4.0](#40-the-error-convention-every-starter-follows))
 - **A failure connect writes into the response BODY is still logged as a plain 200.** The access
   log reads the gRPC status out of the response trailers, so it cannot see a failure that never
   reaches a header. Two shapes do that, both measured on the real server in
