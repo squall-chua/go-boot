@@ -106,9 +106,10 @@ func (s sanitiser) WrapStreamingClient(next connect.StreamingClientFunc) connect
 
 // clean is the whole rule, in one place, so unary and streaming cannot drift.
 //
-// The log line is not decoration. The HTTP access log records 200 for a
-// failed gRPC or gRPC-Web call, because the status rides in trailers, so this
-// is the only place the failure is written down.
+// The log line is not decoration. #43 gave the HTTP access line an rpcCode,
+// so the failure is no longer invisible there, but the access line has only
+// the number: the procedure, the code by name and the real error are written
+// down here and nowhere else.
 func (s sanitiser) clean(ctx context.Context, procedure string, err error) error {
 	if err == nil {
 		return nil
@@ -125,8 +126,7 @@ func (s sanitiser) clean(ctx context.Context, procedure string, err error) error
 
 // logFrom prefers the request-scoped logger web.DefaultMiddleware attached,
 // because it carries the requestId that joins this line to the access line
-// for the same request — and the access line says 200, so this is the only
-// line that says what went wrong.
+// for the same request — and this is the line that says what went wrong.
 //
 // goboot.LoggerFrom falls back to slog.Default() when no middleware ran, and
 // slog.Default() is not the App's logger, so the logger DefaultOptions was

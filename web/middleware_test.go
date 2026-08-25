@@ -214,6 +214,60 @@ func TestAccessLogLine(t *testing.T) {
 	}
 }
 
+// TestTheAccessLogNamesAFailedRPC pins docs/spec.md 4.3. A gRPC status rides
+// in trailers, so the HTTP status line says 200 whether the call worked or
+// not, and the access line has to read the trailer to tell the two apart.
+//
+// Both shapes connect writes are covered, because they are not the same
+// header: plain gRPC always writes a real HTTP trailer, which net/http takes
+// through the "Trailer:" prefix on the header map, while a gRPC-Web response
+// that fails before its first message writes the same key as an ordinary
+// header.
+func TestTheAccessLogNamesAFailedRPC(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		key   string
+		code  string
+		want  any // the rpcCode expected on the line, nil for no field at all
+		level string
+	}{
+		{"grpc failed", http.TrailerPrefix + "Grpc-Status", "2", "2", "ERROR"},
+		{"grpc ok", http.TrailerPrefix + "Grpc-Status", "0", nil, "INFO"},
+		{"grpc-web failed", "Grpc-Status", "5", "5", "ERROR"},
+		{"not an RPC at all", "", "", nil, "INFO"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			sink := newLogSink()
+			url := serve(t, web.DefaultMiddleware(sink.logr), "GET /rpc", func(w http.ResponseWriter, r *http.Request) {
+				if tc.key != "" {
+					w.Header().Set(tc.key, tc.code)
+				}
+				_, _ = io.WriteString(w, "x")
+			})
+			get(t, url+"/rpc")
+
+			lines := sink.requests(t)
+			if len(lines) != 1 {
+				t.Fatalf("got %d access-log lines, want exactly 1", len(lines))
+			}
+			got := lines[0]
+			// 200 is what went on the wire, so 200 is what the line says.
+			// The access log reports the response, it does not translate it.
+			if got["status"] != float64(200) {
+				t.Errorf("status = %v, want the 200 that actually went on the wire", got["status"])
+			}
+			if got["rpcCode"] != tc.want {
+				t.Errorf("rpcCode = %v, want %v", got["rpcCode"], tc.want)
+			}
+			if got["level"] != tc.level {
+				t.Errorf("level = %v, want %v", got["level"], tc.level)
+			}
+		})
+	}
+}
+
 // TestProbePathsAreNotLogged pins the three hardcoded skips. Kubernetes hits
 // the first two every ten seconds, which is ~17,000 lines a day saying
 // nothing.

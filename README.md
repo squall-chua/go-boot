@@ -210,14 +210,27 @@ reach your connect handler free.
 One honest asymmetry with `web.Use`: connect options are **per service**, not per server, so you
 repeat them at every mount. connect has no global registry and there is no way around it.
 
-### The access log records 200 for a failed gRPC call
+### A failed gRPC call in the access log
 
 The gRPC and gRPC-Web status rides in **trailers**, not in the HTTP status line, so the access log
-line for a failed RPC says `"status":200`. Only the Connect protocol maps errors onto HTTP status
-codes. This is not a bug and it is not fixable from go-boot's side.
+line for a failed RPC still says `"status":200` — that is what went on the wire. It also carries
+`"rpcCode":"2"` at level `ERROR`, because `web.Logging` reads the trailer the handler left behind:
 
-**The sanitiser's `rpc failed` line is where the truth lives.** It carries the procedure, the code
-and the real error, tagged with the same `requestId` as the access line.
+```json
+{"level":"ERROR","msg":"request","path":"/greet.v1.GreetService/Greet","status":200,"rpcCode":"2","requestId":"9f2c..."}
+```
+
+So `rpcCode` is what you grep the access log for. It is the gRPC code as a **number**, because
+`goboot/web` links no connect-go and cannot name it.
+
+**The sanitiser's `rpc failed` line is still where the detail lives.** It carries the procedure, the
+code by name and the real error, tagged with the same `requestId` as the access line.
+
+**Two cases are missed**, and both are written down in `docs/spec.md` §9. They are the failures
+connect puts in the response **body**, where no HTTP middleware can reach them: a gRPC-Web call that
+fails *after* its first message, and a Connect-protocol **stream**. Plain gRPC is covered however
+late the failure comes, a gRPC-Web unary failure is covered, and a Connect unary failure never
+needed this — it maps its code onto the HTTP status line.
 
 ### Streaming
 

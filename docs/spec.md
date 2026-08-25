@@ -729,6 +729,32 @@ level=INFO msg=request method=GET path=/users/7 route="GET /users/{id}"
 Both `path` and `route`: `path` is what was asked for, `route` is `r.Pattern`, which is what you
 group by.
 
+**A failed RPC is named on the access line.** Settled in
+[#43](https://github.com/squall-chua/go-boot/issues/43). gRPC and gRPC-Web put their status in
+**trailers**, so the HTTP status line stays 200 and the access line would otherwise read as a
+success. `Logging` reads the `Grpc-Status` the handler left on the response once the handler has
+returned, and when it is there and is not `0` it adds `rpcCode` and raises the level to ERROR:
+
+```
+level=ERROR msg=request method=POST path=/greet.v1.GreetService/Greet
+  route=/greet.v1.GreetService/ status=200 rpcCode=2 bytes=0 duration=0.4ms requestId=9f2c...
+```
+
+Three choices in that line, each deliberate:
+
+- **`status` still says 200**, because 200 is what went on the wire. The access log reports the
+  response, it does not translate it.
+- **`rpcCode` is the gRPC code as a number**, not a name. `goboot/web` may not import connect-go —
+  assertion 2 of [8.1](#81-the-import-leak-check) — and a seventeen-entry copy of connect's table
+  in `goboot/web` is a copy that drifts. The interceptor's `rpc failed` line spells the name.
+- **ERROR is the level the error interceptor already uses** for its own line, so one `requestId`
+  finds both at the same level.
+
+There is no `rpcCode` on a call that succeeded, so `rpcCode` present is the whole test. Plain gRPC
+always carries it. gRPC-Web carries it only when the response is **trailers-only** — nothing written
+to the body and no response header set — which is the ordinary unary failure. What is left out is
+written down in [9. Known gaps](#9-known-gaps-in-v1).
+
 **Probe paths are not logged.** `/livez`, `/readyz` and `/actuator/*` are skipped. Kubernetes probes
 the first two every 10 seconds, which is roughly **17,000 log lines a day** saying nothing. Three
 hardcoded paths, not a config key — those paths belong to go-boot. Document it, or someone will
@@ -839,9 +865,13 @@ useful, write the text —
 `connect.NewError(connect.CodeInvalidArgument, errors.New("name must not be empty"))`. See
 [4.0](#40-the-error-convention-every-starter-follows).
 
-**The HTTP access log records 200 for a failed gRPC or gRPC-Web call.** Measured: the status rides
-in trailers. gRPC and gRPC-Web both show 200, Connect shows 404. The error interceptor's log line
-is where the truth lives. Document this.
+**A failed gRPC or gRPC-Web call is named on the HTTP access line.** Measured: the status rides in
+trailers, so the status line itself shows 200 — where a failed Connect **unary** call maps its code
+onto the status line instead (`connectCodeToHTTP`: `CodeUnknown` is 500, `CodeNotFound` is 404).
+`web.Logging` reads the trailer rather than the status line and adds `rpcCode` — see
+[4.3](#43-gobootweb--the-http-transport-starter). The error interceptor's
+`rpc failed` line still carries the code by name, the procedure and the real error, and is the only
+one that carries them for the two streaming shapes [9](#9-known-gaps-in-v1) records.
 
 **Codegen: go-boot requires nothing.** It never runs codegen and never imports generated code — the
 user's generated package is passed in as a value. `buf` is the documented path only, and a user
@@ -1635,8 +1665,17 @@ Written down as gaps, not left out.
   stands. What #38 did close is the larger half nobody had measured — the adapter this spec printed
   leaked the same string **with the interceptor correctly wired**, because it wrapped the raw error
   in a `*connect.Error`. ([4.0](#40-the-error-convention-every-starter-follows))
-- **The HTTP access log records 200 for a failed gRPC or gRPC-Web call.** The status rides in
-  trailers. The error interceptor's log line carries the real code.
+- **A failure connect writes into the response BODY is still logged as a plain 200.** The access
+  log reads the gRPC status out of the response trailers, so it cannot see a failure that never
+  reaches a header. Two shapes do that, both measured on the real server in
+  [#43](https://github.com/squall-chua/go-boot/issues/43): a **gRPC-Web** call that fails after its
+  first message, because connect moves gRPC-Web trailers into the body once anything has been
+  written; and a **Connect-protocol stream**, which puts its error in the end-of-stream envelope
+  after the 200 has already gone. Plain gRPC is covered however late the failure comes, a Connect
+  unary failure shows its real status, and every gRPC-Web unary failure is trailers-only and so is
+  covered too. The error interceptor's log line carries the real code in all four cases.
+  `TestTheAccessLogMissesAFailureInTheBody` pins both shapes, so this entry cannot go stale in the
+  direction that flatters go-boot.
 - **`ddl-auto=validate` has one hole the JPA lint cannot close.** `varchar` length lives in the
   Java class, so the lint is a supplement to `validate`, never a replacement.
   ([#18](https://github.com/squall-chua/go-boot/issues/18))
@@ -1800,9 +1839,10 @@ Named here so nobody has to infer them from silence.
   shows up as a `.github/module-counts.txt` change either way, so it cannot arrive quietly.
 - **Six of the eight gaps of [9. Known gaps in v1](#9-known-gaps-in-v1).** All eight ship **with**
   `v1` rather than blocking it. Closing one is a minor release **only where the fix adds something
-  or repairs a bug** — for several of those the gap *is* the current behaviour, the access log that
-  records 200 for a failed gRPC call being the sharp case, so the fix changes what an operator
-  sees and belongs in the release note.
+  or repairs a bug** — for several of those the gap *is* the current behaviour, so the fix changes
+  what an operator sees and belongs in the release note. #43 is the worked example: the access log
+  used to record a plain 200 for every failed gRPC call, and closing that added an `rpcCode` field
+  to a line operators already grep.
   **Two of the eight cannot be closed inside `v1` at all**, because the rules above forbid it:
   `maxOpenConns: 10` is a default value, and splitting the Actuator's Prometheus weight into
   `goboot/actuator/metrics` would need a second mount line in the user's own `main`. Both wait

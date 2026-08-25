@@ -36,6 +36,10 @@ const leak = `pq: password authentication failed for user "app" at 10.0.0.5:5432
 type greeter struct {
 	err   error
 	panic bool
+	// sendBeforeErr makes GreetStream send one message before it fails. That
+	// is what moves a gRPC-Web response's trailers off the headers and into
+	// the body, and TestTheAccessLogMissesAFailureInTheBody is its only user.
+	sendBeforeErr bool
 }
 
 func (g *greeter) Greet(_ context.Context, name string) (string, error) {
@@ -66,6 +70,9 @@ func (g *grpcGreeter) Greet(ctx context.Context, req *connect.Request[greetv1.Gr
 
 func (g *grpcGreeter) GreetStream(ctx context.Context, req *connect.Request[greetv1.GreetStreamRequest], stream *connect.ServerStream[greetv1.GreetStreamResponse]) error {
 	if g.svc.err != nil {
+		if g.svc.sendBeforeErr {
+			_ = stream.Send(&greetv1.GreetStreamResponse{Greeting: "hello " + req.Msg.GetName()})
+		}
 		return g.svc.err
 	}
 	for i := range 3 {
@@ -200,8 +207,9 @@ func TestABareErrorPutsNoTextOnTheWire(t *testing.T) {
 }
 
 // TestTheSanitiserLogsTheProcedureAndTheRealError: the caller is told
-// nothing, so the log line is the only place the failure is written down.
-// The access log cannot do it — see the 200 test below.
+// nothing, so this line is where the failure is written down. The access log
+// names the failure too since #43, but only with a code number — see
+// TestTheAccessLogNamesAFailedRPC below.
 func TestTheSanitiserLogsTheProcedureAndTheRealError(t *testing.T) {
 	t.Parallel()
 	base, logs := mount(t, &greeter{err: errors.New(leak)}, defaults)
@@ -218,8 +226,8 @@ func TestTheSanitiserLogsTheProcedureAndTheRealError(t *testing.T) {
 		}
 	}
 	// The requestId is what joins this line to the access line for the same
-	// request, and the access line says 200, so without it the failure cannot
-	// be found from the access log at all.
+	// request. The access line now names the failure too, but only this one
+	// carries the procedure and the real error.
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		if strings.Contains(line, `"msg":"rpc failed"`) && !strings.Contains(line, `"requestId"`) {
 			t.Errorf("the sanitiser line is not request-scoped: %s", line)
@@ -343,18 +351,125 @@ func TestTheRequestScopedLoggerReachesTheRPCHandler(t *testing.T) {
 	}
 }
 
-// TestTheAccessLogRecords200ForAFailedRPC. Measured in #12: the status rides
-// in trailers, so gRPC and gRPC-Web both show 200. It is documented rather
-// than fixed, and this test is what stops the documentation going stale.
-func TestTheAccessLogRecords200ForAFailedRPC(t *testing.T) {
+// TestTheAccessLogNamesAFailedRPC replaces the test that pinned the old
+// behaviour, where a failed RPC reached the access log as a plain 200 and an
+// operator grepping it for failures found none. #43 closed that: web.Logging
+// reads the gRPC status out of the trailers and adds rpcCode.
+//
+// This is the end-to-end half, against a real connect server on both wire
+// protocols. The two header shapes it rests on are pinned separately, in
+// web.TestTheAccessLogNamesAFailedRPC.
+func TestTheAccessLogNamesAFailedRPC(t *testing.T) {
 	t.Parallel()
-	base, logs := mount(t, &greeter{err: errors.New(leak)}, defaults)
+	for _, tc := range []struct {
+		name string
+		opt  connect.ClientOption
+		h2c  bool // plain gRPC needs HTTP/2; gRPC-Web is happy on HTTP/1
+		fail bool
+	}{
+		{"grpc failed", connect.WithGRPC(), true, true},
+		{"grpc ok", connect.WithGRPC(), true, false},
+		{"grpc-web failed", connect.WithGRPCWeb(), false, true},
+		{"grpc-web ok", connect.WithGRPCWeb(), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc := &greeter{}
+			if tc.fail {
+				svc.err = errors.New(leak)
+			}
+			base, logs := mount(t, svc, defaults)
 
-	client := greetv1connect.NewGreetServiceClient(h2cClient(), base, connect.WithGRPC())
-	if _, err := client.Greet(t.Context(), connect.NewRequest(&greetv1.GreetRequest{Name: "ada"})); err == nil {
-		t.Fatal("Greet succeeded, want an error")
+			httpClient := http.DefaultClient
+			if tc.h2c {
+				httpClient = h2cClient()
+			}
+			client := greetv1connect.NewGreetServiceClient(httpClient, base, tc.opt)
+			_, err := client.Greet(t.Context(), connect.NewRequest(&greetv1.GreetRequest{Name: "ada"}))
+			if tc.fail != (err != nil) {
+				t.Fatalf("Greet returned %v, want failed=%v", err, tc.fail)
+			}
+
+			access := accessLine(t, logs)
+			// Still 200, because 200 is what went on the wire. The access
+			// log reports the response, it does not translate it.
+			if !strings.Contains(access, `"status":200`) {
+				t.Errorf("the access line no longer reports the real HTTP status: %s", access)
+			}
+			// CodeUnknown is 2: the sanitiser replaces a bare error with it.
+			want := []string{`"rpcCode":"2"`, `"level":"ERROR"`}
+			if !tc.fail {
+				want = []string{`"level":"INFO"`}
+			}
+			for _, w := range want {
+				if !strings.Contains(access, w) {
+					t.Errorf("the access line is missing %s: %s", w, access)
+				}
+			}
+			if !tc.fail && strings.Contains(access, "rpcCode") {
+				t.Errorf("a successful RPC carries an rpcCode: %s", access)
+			}
+		})
 	}
+}
 
+// TestTheAccessLogMissesAFailureInTheBody pins the two gaps docs/spec.md 9
+// records, for the same reason the 200 test it replaced existed: a gap that is
+// only written down goes stale, and this one would go stale in the direction
+// that flatters go-boot.
+//
+// Both shapes put the failure in the response BODY after the 200 has already
+// gone, so no HTTP middleware can reach it. If either ever starts carrying an
+// rpcCode, this test fails and the spec entry is what needs editing.
+func TestTheAccessLogMissesAFailureInTheBody(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		opt  connect.ClientOption // nil is the Connect protocol
+	}{
+		{"gRPC-Web after its first message", connect.WithGRPCWeb()},
+		{"a Connect-protocol stream", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			base, logs := mount(t, &greeter{err: errors.New(leak), sendBeforeErr: true}, defaults)
+
+			var opts []connect.ClientOption
+			if tc.opt != nil {
+				opts = append(opts, tc.opt)
+			}
+			client := greetv1connect.NewGreetServiceClient(http.DefaultClient, base, opts...)
+			stream, err := client.GreetStream(t.Context(), connect.NewRequest(&greetv1.GreetStreamRequest{Name: "ada"}))
+			if err == nil {
+				for stream.Receive() { //nolint:revive // drain to reach the error
+				}
+				err = stream.Err()
+				stream.Close()
+			}
+			if err == nil {
+				t.Fatal("the stream succeeded, want an error")
+			}
+
+			access := accessLine(t, logs)
+			if strings.Contains(access, "rpcCode") {
+				t.Errorf("this failure is now visible on the access line — update docs/spec.md 9: %s", access)
+			}
+			if !strings.Contains(access, `"status":200`) {
+				t.Errorf("the gap is not what it was, so the spec entry is stale: %s", access)
+			}
+			// The interceptor's line is what an operator has instead, and 9
+			// says so. Without it the failure is written down nowhere.
+			if !strings.Contains(logs.String(), `"msg":"rpc failed"`) {
+				t.Errorf("nothing recorded the failure at all:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+// accessLine returns the last access-log line in the log, which is the one
+// for the RPC the test just made.
+func accessLine(t *testing.T, logs *syncBuf) string {
+	t.Helper()
 	var access string
 	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
 		if strings.Contains(line, `"msg":"request"`) {
@@ -364,9 +479,7 @@ func TestTheAccessLogRecords200ForAFailedRPC(t *testing.T) {
 	if access == "" {
 		t.Fatalf("no access log line:\n%s", logs.String())
 	}
-	if !strings.Contains(access, `"status":200`) {
-		t.Errorf("the documented 200 is no longer what happens: %s", access)
-	}
+	return access
 }
 
 // TestStreamingWorks. docs/spec.md 4.4 says streaming is supported because it

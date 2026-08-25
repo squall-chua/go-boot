@@ -41,6 +41,12 @@ connect safe by default: panic recovery, error sanitising, and the required prot
 - **The HTTP access log records 200 for a failed RPC.** gRPC and gRPC-Web carry the status in
   trailers; only the Connect protocol maps errors to HTTP status codes. go-boot's error interceptor
   logs the real code on failure, and `otelconnect` reports `rpc.grpc.status_code` on the span.
+  > **Amended by [#43](https://github.com/squall-chua/go-boot/issues/43).** The status line still
+  > says 200, but the access *log line* now names the failure: `web.Logging` reads the `Grpc-Status`
+  > trailer off the response and adds an `rpcCode` field at ERROR. Two cases are left, and
+  > `docs/spec.md` 9 records both — a gRPC-Web call that fails after its first message, and a
+  > Connect-protocol stream. Each puts its failure in the response body, out of reach of any HTTP
+  > middleware.
 - **Tracing needs a filter, not a second span.** `otelhttp` would wrap every RPC in a redundant
   parent, so `goboot/trace` skips any request whose content type starts with `application/grpc` or
   which carries a `Connect-Protocol-Version` header.

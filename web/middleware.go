@@ -21,6 +21,11 @@ const maxRequestIDLen = 64
 // on the way out, so a caller can correlate without parsing a body.
 const requestIDHeader = "X-Request-Id"
 
+// rpcStatusHeader is where gRPC and gRPC-Web put the code that the HTTP
+// status line does not carry. Named here rather than imported: goboot/web
+// links no connect-go, and this is a wire constant, not an API.
+const rpcStatusHeader = "Grpc-Status"
+
 // DefaultMiddleware is a slice you can edit, not hidden behaviour. Print it,
 // drop an entry, or splice one in:
 //
@@ -108,16 +113,51 @@ func Logging(log *slog.Logger) Middleware {
 			// r.Pattern is only filled in once ServeMux has routed, so it is
 			// read here rather than above. path is what was asked for; route
 			// is the low-cardinality label to group by.
-			reqLog.Log(r.Context(), level, "request",
+			attrs := []any{
 				"method", r.Method,
 				"path", r.URL.Path,
 				"route", r.Pattern,
 				"status", rec.status,
 				"bytes", rec.bytes,
 				"duration", time.Since(start),
-			)
+			}
+			// A failed RPC left 200 on the status line, so without this the
+			// line above reads as a success. ERROR is the level the gRPC
+			// Starter's own "rpc failed" line uses, so one requestId finds
+			// both at the same level.
+			if code, failed := rpcStatus(rec.Header()); failed {
+				level = slog.LevelError
+				attrs = append(attrs, "rpcCode", code)
+			}
+			reqLog.Log(r.Context(), level, "request", attrs...)
 		})
 	}
+}
+
+// rpcStatus reads the gRPC status code the handler left on the response, and
+// reports whether it is a failing one. Absent counts as success, so an
+// ordinary HTTP response never gains an rpcCode.
+//
+// Two header keys, because connect writes the status in two places. A real
+// HTTP trailer that was never announced reaches net/http as a header key with
+// the "Trailer:" prefix, which is what a plain gRPC handler writes. A
+// trailers-only response — nothing in the body yet — writes the same key as an
+// ordinary header instead, and so does connect's ErrorWriter, which announces
+// its trailers up front. Both are read, so neither shape is missed.
+//
+// What IS missed is a failure connect writes into the response BODY, where no
+// HTTP middleware can see it: a gRPC-Web call that fails after its first
+// message, and a Connect-protocol stream. docs/spec.md 9 records both.
+//
+// The code is passed through as the string on the wire rather than parsed.
+// goboot/web may not import connect-go, so the name behind the number is not
+// available here, and a copy of connect's table would only drift.
+func rpcStatus(h http.Header) (code string, failed bool) {
+	code = h.Get(http.TrailerPrefix + rpcStatusHeader)
+	if code == "" {
+		code = h.Get(rpcStatusHeader)
+	}
+	return code, code != "" && code != "0"
 }
 
 // isProbePath names the three paths that are never logged. Kubernetes hits
