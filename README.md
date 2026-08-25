@@ -14,8 +14,9 @@ it outright.
 Early. What works today is HTTP routes served by a real listener, started and stopped in Tier
 order, with a clean shutdown on SIGTERM; config from a file and the environment; the default
 middleware set with the response helpers below; the Actuator; the database Starter, with a
-real PostgreSQL for tests; the gRPC Transport; and tracing. The rest of the v1 surface — the
-Presets — is being built ticket by ticket against `docs/spec.md`.
+real PostgreSQL for tests; the gRPC Transport; tracing; and the Presets. That is the whole library
+surface `docs/spec.md` locks. What is left is the CI import-leak check, and the Scaffold, which
+that spec defers past v1.
 
 ## Install
 
@@ -427,10 +428,96 @@ func TestWidgets(t *testing.T) {
 }
 ```
 
+`dbtest.StartDSN` returns the connection string alongside the pool, for a test that drives a whole
+`main` rather than a query — `examples/full` uses it to point the service's own `db.dsn` at a real
+database.
+
 It is safe to call from parallel tests. The first run downloads about 14 MB of PostgreSQL binaries
 and extracts them to roughly 71 MB under your user cache directory — measured on linux/amd64 with
 PostgreSQL 18.3. Set `GOBOOT_PG_BINARIES` to a pre-seeded directory to run air-gapped. It is a separate package because it is heavy and because it links a driver, which
 `goboot/db` refuses to.
+
+## The Preset
+
+`preset.Full` wires a whole service in one call: the App, the database pool, the Actuator, the HTTP
+Server and the default middleware. `traced.Full` is the same with tracing.
+
+```go
+var cfg config
+if err := goboot.Load(defaultsFS, "app.yaml", "ORDERS_", &cfg); err != nil {
+	return err
+}
+app, err := traced.Full(cfg.Config, migrations())
+if err != nil {
+	return err
+}
+
+svc := &greeter{db: app.DB, greeting: cfg.Greeting}
+app.Web.Handle("GET /hello/{name}", httpGreet(svc))
+app.Web.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+
+return app.Run(ctx)
+```
+
+**The reason to use it is the upgrade path, not the size of the diff.** Wiring held in a Preset gets
+fixed by `go get -u`; wiring held in your own `main` does not. If go-boot later learns that a fourth
+middleware belongs in the default set, every Preset user picks it up by bumping a version and
+nobody else does. That is the whole argument, and it is why go-boot promises *one call* rather than
+*one line*.
+
+**A Preset takes no options.** No flags, no negation config keys, no middle setting. The returned
+struct lets you **add** — `app.Add(consumer)`, `app.Web.Handle`, `app.Web.Use` — because the
+`*goboot.App` is embedded. It does not let you remove or reorder. To do either, you copy the body of
+`Full` into your own `main` and edit it.
+
+**And copying the body costs you the upgrade path**, which was the only argument for the Preset in
+the first place. A user who copies has chosen to own their wiring, exactly as if they had never used
+a Preset. That is the trade and it is not softened here.
+
+Because copying is the only escape hatch, the copy ships as compiling code rather than as a snippet
+in this file. `examples/full/main.go` is the Preset form above; `examples/full/explicit.go` is
+exactly what `traced.Full` expands to. CI builds both, and one test drives both and asserts they
+serve the same service.
+
+**`goboot.Load` stays in `main`.** Every real service owns at least one config key of its own, so a
+Preset that loaded config for you would break on the first one. Your struct embeds the Preset's
+config inline and adds its own keys beside it:
+
+```go
+type config struct {
+	traced.Config `yaml:",inline"`
+	Greeting      string `yaml:"greeting"`
+}
+```
+
+**`grpc.DefaultOptions(app.Log)` stays in `main` too, in both forms**, because the mount names your
+own generated package and a Preset can never see it. So **the Preset does not protect you from
+forgetting the error-sanitising interceptor**: leave those options off and a bare `error` reaches
+the caller verbatim, password and all. The same is true of the `_ "github.com/jackc/pgx/v5/stdlib"`
+blank import — you bring your own driver in both forms.
+
+### Two packages, because Go links by import
+
+`traced.Full` lives in `goboot/preset/traced` and is a **copy** of `preset.Full`, not a wrapper
+around it. Two reasons, both hard:
+
+- A `preset.WithTracing()` option could not have worked. Naming `goboot/trace` inside
+  `goboot/preset` puts OTel in every Preset user's binary whether the option is set or not — +9.69
+  MB stripped and +23 modules. A test asserts that a build importing `goboot/preset` links no
+  tracing.
+- It could not have wrapped either. `Use` appends, so adding the trace middleware after
+  `preset.Full` has returned puts the span **inside** `Logging`, where the access-log line cannot
+  carry the trace ID. The order that works is RequestID, trace, Logging, Recovery, and only one
+  `Use` call produces it.
+
+So there are two near-identical bodies, deliberately.
+
+### There is no other Preset
+
+`preset.Full` is the only one in v1. There is no `preset.HTTP` and no `preset.Web`: at one Component
+a Preset came out **longer** than the wiring it replaced, which is what `examples/http-only` and
+`examples/http-actuator-config` show. And there is no gRPC variant, because `goboot/grpc` has no
+server and no Component of its own — a gRPC service and an HTTP service wire identically.
 
 ## Go version
 

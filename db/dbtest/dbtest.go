@@ -48,6 +48,16 @@ import (
 // runtime directory and data directory.
 func Start(tb testing.TB, migrations fs.FS) *sql.DB {
 	tb.Helper()
+	pool, _ := StartDSN(tb, migrations)
+	return pool
+}
+
+// StartDSN is Start plus the connection string it opened the pool on. A test
+// that drives a whole main needs the DSN rather than the pool, because main
+// opens a pool of its own from config — so this is what an end-to-end test of
+// a service sets in its <PREFIX>DB__DSN variable.
+func StartDSN(tb testing.TB, migrations fs.FS) (*sql.DB, string) {
+	tb.Helper()
 
 	dir := tb.TempDir()
 	cfg := embeddedpostgres.DefaultConfig().
@@ -76,14 +86,15 @@ func Start(tb testing.TB, migrations fs.FS) *sql.DB {
 	// Registered after the server, so it runs before it: Cleanup is
 	// last-in-first-out, and stopping a server with the pool still open
 	// leaves the pool handing out dead connections.
-	pool, err := sql.Open("pgx", cfg.GetConnectionURL()+"?sslmode=disable")
+	dsn := cfg.GetConnectionURL() + "?sslmode=disable"
+	pool, err := sql.Open("pgx", dsn)
 	if err != nil {
 		tb.Fatalf("dbtest: open pool: %v", err)
 	}
 	tb.Cleanup(func() { _ = pool.Close() })
 
 	if migrations == nil {
-		return pool
+		return pool, dsn
 	}
 	provider, err := db.NewProvider(pool, "pgx", migrations, slog.New(slog.DiscardHandler))
 	if err != nil {
@@ -92,7 +103,7 @@ func Start(tb testing.TB, migrations fs.FS) *sql.DB {
 	if _, err := provider.Up(context.Background()); err != nil {
 		tb.Fatalf("dbtest: apply migrations: %v", err)
 	}
-	return pool
+	return pool, dsn
 }
 
 // freePort asks the kernel for a port and gives it straight back. Two

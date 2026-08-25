@@ -799,9 +799,19 @@ package dbtest
 // Start brings up a real PostgreSQL for one test. migrations may be nil.
 func Start(tb testing.TB, migrations fs.FS) *sql.DB
 
+// StartDSN is Start plus the connection string it opened the pool on.
+func StartDSN(tb testing.TB, migrations fs.FS) (*sql.DB, string)
+
 // LintJPAConventions checks the live schema against docs/jpa-interop.md.
 func LintJPAConventions(tb testing.TB, db *sql.DB)
 ```
+
+> **`StartDSN` added by [#31](https://github.com/squall-chua/go-boot/issues/31).** The Presets came
+> with the rule that one test drives both forms of `examples/full`, and a test that drives a whole
+> `main` cannot use the pool: `main` opens its own from `db.dsn`, so what the test needs to hand it
+> is a DSN. Without this the test would have had to repeat the parallel-safe recipe this package
+> exists to hold, which is the duplication `db/db_pg_test.go` already shows the cost of. `Start` is
+> unchanged and is now a two-line wrapper over `StartDSN`.
 
 Embedded PostgreSQL, not `testcontainers-go`. Measured: **3 linked module roots against 45**, 16
 `go.sum` modules against 128, and no Docker daemon. Run, not just built: real PostgreSQL 18.3 up in

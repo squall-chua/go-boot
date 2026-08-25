@@ -294,8 +294,14 @@ func TestABuildWithNoTracingLinksNoTracing(t *testing.T) {
 		{"/actuator", nil, []string{otelMod, httpMod, connectMod}},
 		{"/db", nil, []string{otelMod, httpMod, connectMod}},
 		{"/grpc", nil, []string{otelMod, httpMod, connectMod}},
+		// The Preset is the one that had to be split in two: naming
+		// goboot/trace here would put OTel in every Preset user's binary,
+		// which is why traced.Full is a copy and not an option.
+		{"/preset", nil, []string{otelMod, httpMod, connectMod}},
+		{"/preset/traced", []string{otelMod, httpMod}, []string{connectMod}},
 		{"/examples/http-only", nil, []string{otelMod, httpMod, connectMod}},
 		{"/examples/http-actuator-config", nil, []string{otelMod, httpMod, connectMod}},
+		{"/examples/full", []string{otelMod, httpMod}, []string{connectMod}},
 		{"/trace", []string{otelMod, httpMod}, []string{connectMod}},
 		{"/trace/rpc", []string{connectMod}, nil},
 	} {

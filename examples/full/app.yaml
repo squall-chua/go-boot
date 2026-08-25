@@ -1,0 +1,21 @@
+# The embedded defaults layer. A file of the same name on disk is laid over
+# this one, and ORDERS_ environment variables over that.
+log:
+  level: info
+  format: json
+web:
+  addr: ":8080"
+actuator:
+  expose: [livez, readyz, info, metrics, loglevel]
+db:
+  # A throwaway local database, so `go run ./examples/full` works with nothing
+  # else set. A REAL password does not belong in this file: it is compiled
+  # into the binary. Send it in ORDERS_DB__DSN, which is the layer that wins.
+  dsn: "postgres://goboot:goboot@localhost:5432/goboot?sslmode=disable"
+  # Local development only. In a rollout every pod would race every other pod,
+  # which is why the default is to refuse to start on a pending migration.
+  migrateOnStart: true
+trace:
+  serviceName: orders
+  # Empty endpoint leaves the collector to OTEL_EXPORTER_OTLP_ENDPOINT.
+greeting: "hello"
