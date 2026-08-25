@@ -12,9 +12,9 @@ it outright.
 ## Status
 
 Early. What works today is HTTP routes served by a real listener, started and stopped in Tier
-order, with a clean shutdown on SIGTERM; config from a file and the environment; and the default
-middleware set with the response helpers below. The rest of the v1 surface — the Actuator, gRPC,
-the database Starter, tracing and the Presets — is being built ticket by ticket against
+order, with a clean shutdown on SIGTERM; config from a file and the environment; the default
+middleware set with the response helpers below; and the Actuator. The rest of the v1 surface —
+gRPC, the database Starter, tracing and the Presets — is being built ticket by ticket against
 `docs/spec.md`.
 
 ## Install
@@ -86,6 +86,43 @@ paths are hardcoded, not a config key.
 Errors on the wire are RFC 7807 documents from `web.WriteProblem`, so a panic and a hand-written
 400 come out in the same shape. `web.DecodeJSON` reads a request body with the size cap, unknown
 field rejection and readable errors that `json.NewDecoder(r.Body).Decode` leaves to you.
+
+## The Actuator
+
+**Metrics answer 404 until you name them.** `actuator.expose` is a whitelist and it defaults to
+`livez, readyz, info`. An endpoint not on the list is never registered, so a wrong Ingress rule
+has nothing to leak. This is the one thing that surprises people, so it is said first.
+
+```go
+act := actuator.New(cfg.Actuator, app)
+act.MountOn(srv)   // the same line whether actuator.addr is set or not
+app.Add(act, srv)
+```
+
+| Path | Method | Exposed by default |
+|---|---|---|
+| `/actuator/livez`, and `/livez` | GET | yes |
+| `/actuator/readyz`, and `/readyz` | GET | yes |
+| `/actuator/info` | GET | yes |
+| `/actuator/metrics` | GET | no |
+| `/actuator/loglevel` | GET, PUT | no |
+| `/actuator/pprof/*` | GET | no |
+
+`/livez` never runs a readiness Check: a liveness test that touches the database turns an outage
+into a restart storm. `/readyz` runs every Check on each request, synchronously, and is 503 unless
+the App has finished starting and all of them pass. A Check is not registered by hand — a Component
+that offers `Check(ctx) error` is picked up when the Actuator starts. The Check gets the request
+context, which already carries the probe's real deadline, so it **must respect cancellation**.
+
+The readiness body is bare, `{"status":"UP"}`. `actuator.showDetails: always` adds the error text
+of each failing Check, which can print a database host, so read it as a decision. Either way a
+failing Check is logged at WARN with the full detail.
+
+`actuator.addr` moves every endpoint to a private listener the Actuator binds and owns. The
+whitelist still applies there.
+
+`examples/http-actuator-config` is a service with the Actuator, the web Starter and its own config
+key, as a file you can run.
 
 ## Go version
 

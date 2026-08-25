@@ -242,3 +242,17 @@ func (a *App) Run(ctx context.Context) error {
 	a.Log.Info("shutting down")
 	return errors.Join(death, a.Stop(context.WithoutCancel(ctx)))
 }
+
+// Checks returns every Component that offers one, keyed by its Name. The
+// Actuator pulls these in its own Start, so nothing in main registers a Check
+// by hand. Duplicate names are already rejected, so no Check can overwrite
+// another.
+func (a *App) Checks() map[string]Checker {
+	m := make(map[string]Checker)
+	for _, c := range a.comps {
+		if ch, ok := c.(Checker); ok {
+			m[c.Name()] = ch
+		}
+	}
+	return m
+}

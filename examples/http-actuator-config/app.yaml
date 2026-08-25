@@ -1,0 +1,12 @@
+# The embedded defaults layer. A file of the same name on disk is laid over
+# this one, and ORDERS_ environment variables over that.
+log:
+  level: info
+  format: text
+web:
+  addr: ":8080"
+actuator:
+  # The whitelist. Drop metrics or loglevel from this list and the endpoint
+  # answers 404: it is never registered at all.
+  expose: [livez, readyz, info, metrics, loglevel]
+greeting: "hi"
