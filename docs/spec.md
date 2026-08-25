@@ -322,7 +322,8 @@ func (a *App) Run(ctx context.Context) error // Start, wait, Stop
 
 func Load(defaults fs.FS, path, prefix string, out any) error
 
-// WithLogger is what the RequestID middleware calls.
+// WithLogger is what the web Starter's Logging middleware calls, and what
+// the gRPC interceptor will call.
 func WithLogger(ctx context.Context, log *slog.Logger) context.Context
 
 // LoggerFrom returns the request-scoped logger, already carrying the request
@@ -544,7 +545,12 @@ hardcoded paths, not a config key — those paths belong to go-boot. Document it
 wonder why probe traffic is invisible.
 
 **Errors on the wire: RFC 7807.** `Content-Type: application/problem+json`, with `type`, `title`,
-`status`, `detail`, `instance`. A struct and a content type, no dependency. Spring Boot has shipped
+`status` and `detail`. A struct and a content type, no dependency.
+
+**No `instance`.** RFC 7807 makes it optional, and `WriteProblem(w, status, detail)` takes no
+request, so there is nothing to build the URI from. Adding one would mean
+`WriteProblem(w, r, status, detail)` — a longer line at every call site for a member few readers
+look at. The `X-Request-Id` on the response already answers "which occurrence was this". Spring Boot has shipped
 `ProblemDetail` since 3.0, and the audience is Spring developers. The recovery middleware uses the
 same `WriteProblem`, so a panic and a hand-written 400 come out in the same shape.
 
