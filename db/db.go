@@ -137,7 +137,7 @@ func NewProvider(pool *sql.DB, driver string, migrations fs.FS, log *slog.Logger
 	case "sqlite", "sqlite3":
 		dialect = goose.DialectSQLite3
 	default:
-		return nil, fmt.Errorf("db: no goose dialect for driver %q; supported drivers are pgx, postgres, mysql, sqlite, sqlite3", driver)
+		return nil, fmt.Errorf("db.driver: no goose dialect for %q; supported drivers are pgx, postgres, mysql, sqlite, sqlite3", driver)
 	}
 	if log == nil {
 		log = slog.Default()

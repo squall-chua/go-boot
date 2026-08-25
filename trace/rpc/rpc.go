@@ -21,6 +21,8 @@
 package rpc
 
 import (
+	"fmt"
+
 	"connectrpc.com/connect"
 	"connectrpc.com/otelconnect"
 )
@@ -46,7 +48,9 @@ import (
 func Options() ([]connect.HandlerOption, error) {
 	interceptor, err := otelconnect.NewInterceptor(otelconnect.WithoutMetrics())
 	if err != nil {
-		return nil, err
+		// Given a locator, per docs/spec.md 4.0: otelconnect's own message
+		// names nothing a reader of main would recognise.
+		return nil, fmt.Errorf("trace/rpc: %w", err)
 	}
 	return []connect.HandlerOption{connect.WithInterceptors(interceptor)}, nil
 }

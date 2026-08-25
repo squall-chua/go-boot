@@ -30,7 +30,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	srv := web.New(web.Config{Addr: ":8080"}, app.Log)
+	srv, err := web.New(web.Config{Addr: ":8080"}, app.Log)
+	if err != nil {
+		return err
+	}
 	srv.Use(web.DefaultMiddleware(app.Log)...)
 	app.Add(srv)
 

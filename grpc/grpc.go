@@ -11,7 +11,10 @@
 // address belongs to goboot/web, and two ports is web.New called twice.
 //
 // What is left in this package is the handler options that make connect safe
-// by default.
+// by default. They are not the whole of it: the sanitiser passes a
+// *connect.Error through untouched on purpose, so an adapter that wraps a raw
+// error in one hands the caller that error's text however carefully these
+// options are wired. See docs/spec.md 4.0.
 package grpc
 
 import (

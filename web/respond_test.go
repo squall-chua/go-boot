@@ -133,7 +133,10 @@ func TestDecodeJSONCapsTheBody(t *testing.T) {
 func TestDecodeJSONHonoursTheConfiguredCap(t *testing.T) {
 	t.Parallel()
 	sink := newLogSink()
-	srv := web.New(web.Config{Addr: "127.0.0.1:0", MaxBodyBytes: 32}, sink.logr)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0", MaxBodyBytes: 32}, sink.logr)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.HandleFunc("POST /p", func(w http.ResponseWriter, r *http.Request) {
 		var p person
 		if err := web.DecodeJSON(r, &p); err != nil {

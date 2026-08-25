@@ -49,10 +49,19 @@ type Server struct {
 	tls     struct{ certFile, keyFile string }
 }
 
-// New builds the Server. It cannot fail, so it returns no error: the listener
-// is opened in Start, which does return one. A nil logger falls back to
-// slog.Default() rather than panicking later.
-func New(cfg Config, log *slog.Logger) *Server {
+// New builds the Server. It validates its own config and returns an error if
+// anything in it is wrong; Start reports only what needs the world, which
+// here is the listener. That split is the convention of docs/spec.md 4.0 and
+// ADR 0011.
+//
+// A nil logger falls back to slog.Default() rather than panicking later.
+func New(cfg Config, log *slog.Logger) (*Server, error) {
+	// One key without the other is a half-finished config, most likely a
+	// misspelt path. Checked here, before anything is built, so it can never
+	// leave the service quietly serving plain HTTP.
+	if (cfg.TLS.CertFile == "") != (cfg.TLS.KeyFile == "") {
+		return nil, errors.New("web.tls: needs both certFile and keyFile, or neither")
+	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
@@ -84,7 +93,7 @@ func New(cfg Config, log *slog.Logger) *Server {
 		maxBody: cfg.MaxBodyBytes,
 	}
 	s.tls.certFile, s.tls.keyFile = cfg.TLS.CertFile, cfg.TLS.KeyFile
-	return s
+	return s, nil
 }
 
 // protocols turns on cleartext HTTP/2 alongside HTTP/1. This is what makes
@@ -140,12 +149,6 @@ func (s *Server) Tier() goboot.Tier { return goboot.TierTransport }
 // Start opens the listener and serves in the background. It returns once the
 // port is bound, so a caller can read Addr straight after.
 func (s *Server) Start(ctx context.Context) (<-chan error, error) {
-	// One key without the other is a half-finished config, most likely a
-	// misspelt path. Checked here, before the listener opens, so it comes
-	// back from Start rather than arriving on errc a moment later.
-	if (s.tls.certFile == "") != (s.tls.keyFile == "") {
-		return nil, errors.New("web: tls needs both certFile and keyFile, or neither")
-	}
 	// Wrap the mux itself, never s.srv.Handler, so a second Start does not
 	// wrap the middleware round a second time.
 	var h http.Handler = s.mux
@@ -174,8 +177,8 @@ func (s *Server) Start(ctx context.Context) (<-chan error, error) {
 	return s.errc, nil
 }
 
-// serve picks the plain or the TLS listener. Start has already rejected one
-// key without the other, so testing either is enough.
+// serve picks the plain or the TLS listener. New has already rejected one key
+// without the other, so testing either is enough.
 func (s *Server) serve(ln net.Listener) error {
 	if s.tls.certFile != "" {
 		return s.srv.ServeTLS(ln, s.tls.certFile, s.tls.keyFile)

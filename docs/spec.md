@@ -286,6 +286,184 @@ Write these in the config documentation as choices, so nobody files them as gaps
 that exist only to hold a dependency: `goboot/grpc/health`, `goboot/grpc/reflection`,
 `goboot/trace/rpc`, `goboot/db/dbtest`.
 
+### 4.0 The error convention every Starter follows
+
+Settled in [#38](https://github.com/squall-chua/go-boot/issues/38). ADR `0011`. Both
+[#11](https://github.com/squall-chua/go-boot/issues/11) and
+[#12](https://github.com/squall-chua/go-boot/issues/12) deferred error handling here on purpose, so
+that HTTP and gRPC got one answer rather than two that disagree. This is the section
+[12. Versioning and release policy](#12-versioning-and-release-policy) named as the gate on
+`v1.0.0`.
+
+#### There is no go-boot error type, and no go-boot sentinel
+
+A Starter returns a plain `error`, built with `errors.New` or `fmt.Errorf`. There is no
+`goboot.Error`, no `goboot.ErrConfig`, and no exported sentinel in any of the twelve packages.
+
+A caller who needs to branch matches on the sentinel belonging to whoever produced the fault —
+`sql.ErrNoRows`, `fs.ErrNotExist`, `http.MaxBytesError` — with `errors.Is` or `errors.As`. It never
+matches on a go-boot identifier, because there is none, and it never matches on a message string.
+
+This is the same refusal ADR `0004` already made one level down: `goboot/web` has no
+`func(w, r) error` and no error type a handler returns. An error type here would exist for `main`
+alone, and `main` has one error path with one thing to do at the end of it — print the error and
+exit non-zero. A type nothing reads is a type nothing needs.
+
+The argument that settles it is the same one ADR `0010` used against Preset options: **adding a
+sentinel later is additive, removing one is breaking.** Shipping none is the choice that keeps the
+option open. If a real service ever needs `main` to tell a config typo from a database being down,
+`goboot.ErrConfig` can arrive in a `v1.x` without breaking anyone.
+
+#### Every error opens with the thing to go and look at
+
+`fmt.Errorf` with `%w`, never `%v`, so the cause survives all the way to `main`. The message opens
+with a locator, and which locator depends on what is at fault:
+
+| What is at fault | Locator | Example |
+| --- | --- | --- |
+| A config key | the key path, as written in YAML | `web.tls: needs both certFile and keyFile, or neither` |
+| A config file | `config` and the file name | `config app-local.yaml: line 7: no = or : separator` |
+| A Component | the Component name, and the phase when there is one | `start web: listen tcp :8080: address already in use`, `duplicate component name "web"` |
+| Nothing narrower | the package identifier, written the short way [1. Ground rules](#1-ground-rules) writes it | `db: migrations are pending; run ...`, `trace/rpc: ...` |
+
+The key path is the one that matters, because it is the only locator that tells an operator which
+line of which YAML file to edit. `actuator.expose: no endpoint named "metric"` was already written
+this way and is the model the rest were brought to.
+
+There is no bare message with no locator in the eleven packages a service links. The twelfth,
+`goboot/db/dbtest`, is exempt and is the only one: every one of its exports takes a `testing.TB`
+and calls `Fatal` on it, so none of its text ever reaches a `main` — its messages name the check
+that failed rather than a config key, and that is right for a test helper.
+
+**One carve-out, and it is a different audience rather than an exception.** The rule above is about
+errors a Starter hands back to `main`, for an operator to read. An error written for the **API
+caller** carries no locator, because a Go package name has no meaning to whoever called the
+service. Two in v1:
+
+- `web.DecodeJSON` — `body is empty`, `field "age" must be a number`. A handler passes these
+  straight to `WriteProblem` as the RFC 7807 `detail`, so a `web:` prefix would put a Go package
+  name in an HTTP response body.
+- `goboot/grpc/health` — `unknown service "orders.v1.Orders"`, inside a `*connect.Error` the
+  package built itself.
+
+Both are the same slot as [Text reaching a caller is text the handler chose](#text-reaching-a-caller-is-text-the-handler-chose)
+below: go-boot is the handler here, and it wrote those words.
+
+#### Misconfiguration comes back from the constructor, not from Start
+
+**A constructor validates its own config and returns `(T, error)`. `Start` reports only what needs
+the world.**
+
+All twelve public packages are below, so the rule can be checked rather than believed. Every one
+that has config to validate follows it; the rest are listed with the reason they have nothing to
+validate, because "not applicable" and "overlooked" look identical in a shorter table:
+
+| Package | The constructor rejects | `Start` reports |
+| --- | --- | --- |
+| `goboot` | a `log.level` that is not a level | a Component that failed to start or died |
+| `goboot/actuator` | an `actuator.expose` entry naming no endpoint | binding the private listener |
+| `goboot/web` | half a `web.tls` pair | binding the listener |
+| `goboot/db` | a `db.driver` with no goose dialect, and `sql.Open` | reaching the database, pending migrations |
+| `goboot/trace` | a `trace.sampleRatio` outside 0..1 | building the exporter |
+| `goboot/preset`, `goboot/preset/traced` | nothing of their own — they return the first error the constructors above give them | — |
+| `goboot/trace/rpc` | `rpc.Options` returns what `otelconnect` refuses | — |
+| `goboot/grpc`, `goboot/grpc/health`, `goboot/grpc/reflection` | nothing: no config, no Component, no constructor that can fail | — |
+| `goboot/db/dbtest` | — a test helper: it takes `*testing.T` and fails the test | — |
+
+`goboot/trace` is the one that was already right before #38 and is worth reading as the model —
+"New checks the config and holds it. Nothing is built here: the exporter belongs to Start."
+
+Before #38 the rule was half kept. `goboot.New` and `db.New` returned an error; `web.New` and
+`actuator.New` did not, and their two config faults surfaced from `Start` a few lines later. Both
+faults are pure validation that touches nothing outside the `Config` struct, so both moved into the
+constructor, and `web.New` and `actuator.New` grew an `error` return.
+
+**That signature change is the whole reason #38 gated `v1.0.0`.** It is the only breaking change on
+the deferred list, it lands in a `v0`, and after it the surface can be frozen.
+
+It costs `main` six lines in the explicit form of [6.3](#63-full--the-whole-v1-surface-both-forms),
+and that cost is real rather than something to talk away. What is bought is one rule a reader can
+hold: **if a constructor returned no error, nothing about your config can be wrong yet.** The
+alternative — a reader checking, per Starter, whether this one validates early or late — is the
+thing the convention exists to delete.
+
+#### No error text a Starter did not write reaches a caller
+
+One rule, both Transports. The mechanisms differ because the protocols do — an HTTP error is a body
+a handler writes, a gRPC error is a value a handler returns — but the rule does not.
+
+- **HTTP.** In `goboot/web`, `WriteProblem` is the only writer of an error body, RFC 7807 in
+  shape, and the Recovery middleware calls the same function, so a panic and a hand-written 400
+  leave in one form. A handler that writes an error body itself has opted out, and go-boot cannot
+  stop it.
+- **The Actuator is the one other place go-boot answers a caller with an error**, the two 400s on
+  `PUT /actuator/loglevel`. They stay plain text rather than RFC 7807, because every other Actuator
+  body is plain JSON and `goboot/actuator` deliberately does not import `goboot/web` (ADR `0003`).
+  What they do follow is the rule below: the words are the Actuator's own.
+- **gRPC.** The sanitising interceptor in `grpc.DefaultOptions` replaces any non-`*connect.Error`
+  with a bare `CodeUnknown` and logs the real one against the procedure. #12 measured what its
+  absence costs: `pq: password authentication failed for user "app" at 10.0.0.5:5432` went out on
+  the wire verbatim.
+
+#### Text reaching a caller is text the handler chose
+
+The rule above is not satisfied by wiring the sanitiser. Measured, with every option in
+`grpc.DefaultOptions` correctly on: the adapter this spec used to print,
+
+```go
+if err != nil {
+	return nil, connect.NewError(connect.CodeInternal, err)
+}
+```
+
+put `internal: pq: password authentication failed for user "app" at 10.0.0.5:5432` on the wire.
+`connect.NewError(code, err)` makes `err`'s own text the message the caller receives, and the
+sanitiser passes a `*connect.Error` through **untouched on purpose** — constructing one is the only
+way a handler can say "this text is safe to send". Wrapping an error from below in one is a handler
+claiming that about text it never read.
+
+So the rule is one sentence and it is the same sentence on both Transports:
+
+> **Any text a caller receives is text the handler wrote for that caller.** Never `err.Error()`
+> from below, on either Transport.
+
+- **gRPC.** Return the Service Layer's error **bare** and let the sanitiser own the wire: it logs
+  the real error against the procedure and sends a bare `CodeUnknown`. To tell the caller something
+  useful, write the text: `connect.NewError(connect.CodeInvalidArgument, errors.New("name must not be empty"))`.
+- **HTTP.** `WriteProblem(w, status, detail)` takes a `detail` string, and it is a string the
+  handler wrote. `web.WriteProblem(w, 400, err.Error())` is the same mistake in the same shape, and
+  the type system will not stop it either.
+
+The parallel is exact, and that is the point of settling both at once: `detail` and a constructed
+`*connect.Error` are the same slot — the one place a handler is trusted, because it is the one
+place a handler has read the words.
+
+Three tests in `goboot/grpc` hold this down: the wrapping adapter still leaks and is pinned as
+leaking, the documented adapter does not, and a handler's own `*connect.Error` still arrives with
+its text and its code.
+
+#### What was looked at and left alone
+
+**A `grpc.Handle` that applied `DefaultOptions` for you.** The idea was to make the sanitised mount
+the short one, since [9. Known gaps](#9-known-gaps-in-v1) records that no Preset can carry a line
+naming the user's generated package. It does not survive Go's type inference. The generated
+constructor is `func(SomeServiceHandler, ...connect.HandlerOption) (string, http.Handler)`, so a
+helper taking it as a value infers its type parameter as the **interface**, and the user's adapter
+— which merely *implements* that interface — then fails to unify. The three shapes that compile:
+
+- an explicit type argument, `grpc.Handle[greetv1connect.GreetServiceHandler](...)` — longer than
+  the line it replaces, and it makes the user name a generated identifier they otherwise never
+  type;
+- a closure per mount — three lines where there was one;
+- `svc any` with a type assertion inside — short, but it turns a compile error into a startup
+  panic, which is the thing [10. What go-boot does not do](#10-what-go-boot-does-not-do) rejects a
+  DI container for.
+
+None of them is shorter *and* compile-checked, and a mount helper that is longer than the raw mount
+is a helper nobody reaches for. So `goboot/grpc` keeps exactly one exported function,
+`DefaultOptions`, and the gap in §9 stays a gap. The leak measured above was the larger half of it
+and that one is closed.
+
 ### 4.1 `goboot` — the base Starter
 
 Config, logging, the Component lifecycle, graceful shutdown, and the request-scoped logger.
@@ -373,7 +551,7 @@ type Handler interface {
 
 type Check func(context.Context) error
 
-func New(cfg Config, app *goboot.App) *Actuator
+func New(cfg Config, app *goboot.App) (*Actuator, error)
 func (a *Actuator) MountOn(h Handler)
 
 func (a *Actuator) Name() string                              // "actuator"
@@ -478,7 +656,7 @@ type Config struct {
 
 type Middleware = func(http.Handler) http.Handler
 
-func New(cfg Config, log *slog.Logger) *Server
+func New(cfg Config, log *slog.Logger) (*Server, error)
 
 // Handle takes the two-value return of a connect-go constructor unchanged.
 func (s *Server) Handle(pattern string, h http.Handler)
@@ -613,6 +791,11 @@ package grpc
 func DefaultOptions(log *slog.Logger) []connect.HandlerOption
 ```
 
+**`DefaultOptions` is the only exported function in this package**, and
+[4.0](#40-the-error-convention-every-starter-follows) records the mount helper that was tried and
+refused: Go's type inference cannot give one that is both shorter than the raw mount and
+compile-checked.
+
 **The error-sanitising interceptor is mandatory, not a nicety.** Measured: a bare `error` returned
 from a connect handler reaches the caller **verbatim** —
 `pq: password authentication failed for user "app" at 10.0.0.5:5432` went out on the wire. The
@@ -641,11 +824,20 @@ type grpcGreeter struct{ svc *greeter }
 func (g *grpcGreeter) Greet(ctx context.Context, req *connect.Request[greetv1.GreetRequest]) (*connect.Response[greetv1.GreetResponse], error) {
 	out, err := g.svc.Greet(ctx, req.Msg.GetName())
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, err // bare: the sanitiser owns what the caller sees
 	}
 	return connect.NewResponse(&greetv1.GreetResponse{Greeting: out}), nil
 }
 ```
+
+**The error is returned bare, and that is load-bearing.** This section printed
+`connect.NewError(connect.CodeInternal, err)` until
+[#38](https://github.com/squall-chua/go-boot/issues/38) measured what it does: it makes `err`'s own
+text the message the caller receives, and the sanitiser passes a `*connect.Error` through untouched
+by design, so the password went out with every option correctly wired. To tell a caller something
+useful, write the text —
+`connect.NewError(connect.CodeInvalidArgument, errors.New("name must not be empty"))`. See
+[4.0](#40-the-error-convention-every-starter-follows).
 
 **The HTTP access log records 200 for a failed gRPC or gRPC-Web call.** Measured: the status rides
 in trailers. gRPC and gRPC-Web both show 200, Connect shows 404. The error interceptor's log line
@@ -1003,7 +1195,8 @@ type Config struct {
 func Full(cfg Config, migrations fs.FS) (*preset.App, error)
 ```
 
-`preset.Full` wires, in this order: `goboot.New`, `db.New`, `actuator.New`, `web.New`,
+`preset.Full` wires, in this order: `goboot.New`, `db.New`, `actuator.New`, `web.New` — each
+checked for an error, per [4.0](#40-the-error-convention-every-starter-follows) —
 `srv.Use(web.DefaultMiddleware(app.Log)...)`, `act.MountOn(srv)`, `app.Add(act, database, srv)`.
 `traced.Full` is the same with `trace.New` added and `trace.DefaultMiddleware` in place of
 `web.DefaultMiddleware`.
@@ -1093,7 +1286,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	srv := web.New(web.Config{Addr: ":8080"}, app.Log)
+	srv, err := web.New(web.Config{Addr: ":8080"}, app.Log)
+	if err != nil {
+		return err
+	}
 	srv.Use(web.DefaultMiddleware(app.Log)...)
 	app.Add(srv)
 
@@ -1129,8 +1325,14 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	act := actuator.New(cfg.Actuator, app)
-	srv := web.New(cfg.Web, app.Log)
+	act, err := actuator.New(cfg.Actuator, app)
+	if err != nil {
+		return err
+	}
+	srv, err := web.New(cfg.Web, app.Log)
+	if err != nil {
+		return err
+	}
 	srv.Use(web.DefaultMiddleware(app.Log)...)
 	act.MountOn(srv)
 	app.Add(act, srv)
@@ -1199,8 +1401,14 @@ func runExplicit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	act := actuator.New(cfg.Actuator, app)
-	srv := web.New(cfg.Web, app.Log)
+	act, err := actuator.New(cfg.Actuator, app)
+	if err != nil {
+		return err
+	}
+	srv, err := web.New(cfg.Web, app.Log)
+	if err != nil {
+		return err
+	}
 	srv.Use(trace.DefaultMiddleware(app.Log)...) // five entries; see 4.6
 	act.MountOn(srv)
 	app.Add(act, tracer, database, srv)
@@ -1418,10 +1626,15 @@ Written down as gaps, not left out.
 - **No RPC metrics.** No count and no latency by procedure. This is the consequence of choosing
   traces-only for RPCs: `otelconnect` would put metrics into the OTel pipeline, which
   `/actuator/metrics` cannot see. RPCs get spans. ([#12](https://github.com/squall-chua/go-boot/issues/12))
-- **`grpc.DefaultOptions(app.Log)` stays in `main` in both the Preset and the explicit form**,
-  because the mount names the user's generated package. **So the Preset does not protect anyone
-  from the missing error-sanitising interceptor**, and #12 measured what that costs: a bare `error`
-  reaches the caller verbatim, password and all.
+- **The gRPC mount stays in `main` in both the Preset and the explicit form**, because it names
+  the user's generated package. **So no Preset can protect anyone from the missing error-sanitising
+  interceptor**, and #12 measured what that costs: a bare `error` reaches the caller verbatim,
+  password and all. [#38](https://github.com/squall-chua/go-boot/issues/38) tried to close it with
+  a `grpc.Handle` that carried the options, and refused every shape of it: none is both shorter
+  than the raw mount and compile-checked, and one that is longer is one nobody reaches for. The gap
+  stands. What #38 did close is the larger half nobody had measured — the adapter this spec printed
+  leaked the same string **with the interceptor correctly wired**, because it wrapped the raw error
+  in a `*connect.Error`. ([4.0](#40-the-error-convention-every-starter-follows))
 - **The HTTP access log records 200 for a failed gRPC or gRPC-Web call.** The status rides in
   trailers. The error interceptor's log line carries the real code.
 - **`ddl-auto=validate` has one hole the JPA lint cannot close.** `varchar` length lives in the
@@ -1472,8 +1685,13 @@ had to add for Java.
 
 ## 11. Deferred past v1
 
-In scope for go-boot, but not in this spec and not blocking the *building* of v1. One of them
-blocks the *tagging* of it, and says so on its own line.
+In scope for go-boot, but not in this spec and not blocking the *building* of v1.
+
+**The error-handling convention has left this list.** It was the one item that gated the `v1.0.0`
+tag, and it is settled in
+[4.0. The error convention every Starter follows](#40-the-error-convention-every-starter-follows)
+([#38](https://github.com/squall-chua/go-boot/issues/38)). Nothing left below gates a tag: all five
+are additive.
 
 - **Security Starter** — authentication, authorization, JWT, OAuth2 resource server, security
   headers. It owns the ground `goboot/web` deliberately left empty. Too large to phrase sharply
@@ -1489,13 +1707,6 @@ blocks the *tagging* of it, and says so on its own line.
   the `version` column and the `ddl-auto=validate` CI job. Only the `version` column is
   JPA-specific — the rest is right for everyone, so most of it should be the default rather than a
   flag.
-- **Error handling convention across go-boot**
-  ([#38](https://github.com/squall-chua/go-boot/issues/38)) — sentinel errors, wrapping, what a
-  Starter returns on misconfiguration, and whether a go-boot error type exists at all. Both #11
-  and #12 deferred it here deliberately: settle it once for HTTP and gRPC together, not twice.
-  **This is the one item on this list that gates the `v1.0.0` tag**, because it is the only one
-  that can still change the surface of an existing Starter — see
-  [12. Versioning and release policy](#12-versioning-and-release-policy).
 - **Docs and examples strategy** — how a newcomer learns this in ten minutes.
 
 ---
@@ -1600,25 +1811,28 @@ Named here so nobody has to infer them from silence.
 
 ### The one thing that gates `v1.0.0`
 
-Of the six items still in [11. Deferred past v1](#11-deferred-past-v1), five are **additive**: the
-Security, Messaging and Cache Starters are new packages, the Scaffold is a separate binary, and the
-docs strategy is not code. A `v1` minor release can carry any of them.
+Every item in [11. Deferred past v1](#11-deferred-past-v1) is **additive**: the Security, Messaging
+and Cache Starters are new packages, the Scaffold is a separate binary, and the docs strategy is not
+code. A `v1` minor release can carry any of them.
 
-**Exactly one can still change the surface of an existing Starter: the error-handling convention**
-([#38](https://github.com/squall-chua/go-boot/issues/38)).
-It decides what every Starter returns on misconfiguration and whether a go-boot error type exists
-at all — a signature question across all twelve packages. Freezing the surface before it lands
-would freeze it wrong, and the only way out of that is a `v2` on a library that has barely shipped.
+Exactly one item was ever able to change the surface of an existing Starter: the error-handling
+convention ([#38](https://github.com/squall-chua/go-boot/issues/38)). It decided what every Starter
+returns on misconfiguration and whether a go-boot error type exists at all — a signature question
+across all twelve packages. Freezing the surface before it landed would have frozen it wrong, and
+the only way out of that is a `v2` on a library that has barely shipped.
 
-So the gate is one sentence, and it is checkable rather than a judgement call:
+So the gate was one sentence, and it was checkable rather than a judgement call:
 
 > **`v1.0.0` is cut from the first `v0` release that ships the settled error-handling convention
 > of [#38](https://github.com/squall-chua/go-boot/issues/38)**, with the checklist below green.
 
 **Settled** means the same here as everywhere else in this file, so it is a fact to look up rather
 than a judgement to make: **[#38](https://github.com/squall-chua/go-boot/issues/38) is closed**,
-and this spec has a section stating what it settled. Until both are true, the answer to "can we
-tag `v1.0.0`" is no. Nothing else on the deferred list gates it.
+and this spec has a section stating what it settled.
+[4.0. The error convention every Starter follows](#40-the-error-convention-every-starter-follows)
+is that section, so **with #38 closed against it the gate is open**. It changed two signatures,
+`web.New` and `actuator.New`, and that change must ship in a `v0` release **before** the `v1.0.0`
+tag rather than in the tag itself.
 
 ### The release checklist
 

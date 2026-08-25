@@ -50,6 +50,11 @@ type problem struct {
 //
 // It is a function a handler calls, not a handler signature: handlers stay
 // http.HandlerFunc (ADR 0004).
+//
+// detail is text YOU wrote for this caller. WriteProblem(w, 400, err.Error())
+// is the HTTP half of the leak docs/spec.md 4.0 names: it hands the caller
+// whatever text came up from below, which on a bad day is a driver saying
+// which host and user the password failed for.
 func WriteProblem(w http.ResponseWriter, status int, detail string) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)

@@ -59,8 +59,14 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	act := actuator.New(cfg.Actuator, app)
-	srv := web.New(cfg.Web, app.Log)
+	act, err := actuator.New(cfg.Actuator, app)
+	if err != nil {
+		return err
+	}
+	srv, err := web.New(cfg.Web, app.Log)
+	if err != nil {
+		return err
+	}
 	srv.Use(web.DefaultMiddleware(app.Log)...)
 	act.MountOn(srv)
 	app.Add(act, srv)

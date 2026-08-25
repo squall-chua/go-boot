@@ -60,7 +60,7 @@ func New(cfg Config) (*App, error) {
 	lvl := new(slog.LevelVar)
 	if cfg.Log.Level != "" {
 		if err := lvl.UnmarshalText([]byte(cfg.Log.Level)); err != nil {
-			return nil, fmt.Errorf("log level %q: %w", cfg.Log.Level, err)
+			return nil, fmt.Errorf("log.level: %q is not a level: %w", cfg.Log.Level, err)
 		}
 	}
 	opts := &slog.HandlerOptions{Level: lvl}

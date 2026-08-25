@@ -86,8 +86,14 @@ func Full(cfg Config, migrations fs.FS) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	act := actuator.New(cfg.Actuator, app)
-	srv := web.New(cfg.Web, app.Log)
+	act, err := actuator.New(cfg.Actuator, app)
+	if err != nil {
+		return nil, err
+	}
+	srv, err := web.New(cfg.Web, app.Log)
+	if err != nil {
+		return nil, err
+	}
 	srv.Use(web.DefaultMiddleware(app.Log)...) // forget this and a panic returns NO response
 	act.MountOn(srv)                           // forget this and there is no /readyz
 	app.Add(act, database, srv)                // the order here is ignored; Tier decides

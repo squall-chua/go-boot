@@ -64,7 +64,10 @@ func TestAReflectionClientListsTheService(t *testing.T) {
 	}
 	app.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.Handle(greetv1connect.NewGreetServiceHandler(&greetService{}))
 	reflection.MountOn(srv, greetv1connect.GreetServiceName)
 	app.Add(srv)

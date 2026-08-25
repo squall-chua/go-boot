@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,7 +26,10 @@ import (
 // there is no way to observe a write deadline that is absent.
 func TestTimeoutDefaults(t *testing.T) {
 	t.Parallel()
-	s := New(Config{}, slog.Default())
+	s, err := New(Config{}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := s.srv.ReadHeaderTimeout; got != 5*time.Second {
 		t.Errorf("ReadHeaderTimeout = %v, want 5s", got)
 	}
@@ -51,7 +55,10 @@ func TestTLSIsTwoKeys(t *testing.T) {
 
 	cfg := Config{Addr: "127.0.0.1:0"}
 	cfg.TLS.CertFile, cfg.TLS.KeyFile = certFile, keyFile
-	s := New(cfg, slog.New(slog.DiscardHandler))
+	s, err := New(cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	s.HandleFunc("GET /x", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "secure")
 	})
@@ -94,7 +101,10 @@ func TestHTTP2OverTLSStaysOn(t *testing.T) {
 
 	cfg := Config{Addr: "127.0.0.1:0"}
 	cfg.TLS.CertFile, cfg.TLS.KeyFile = certFile, keyFile
-	s := New(cfg, slog.New(slog.DiscardHandler))
+	s, err := New(cfg, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	s.HandleFunc("GET /x", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, r.Proto)
 	})
@@ -174,9 +184,14 @@ func write(t *testing.T, path string, block *pem.Block) {
 }
 
 // TestTLSRejectsAHalfConfig pins that one key without the other is refused by
-// Start, not by the goroutine a moment later. A misspelt key path must not
-// leave the service quietly serving plain HTTP, and must not surface as a
-// bare "open : no such file" on the death channel.
+// New, before anything is built and long before the goroutine that would
+// surface it as a bare "open : no such file" on the death channel. A misspelt
+// key path must not leave the service quietly serving plain HTTP.
+//
+// New and not Start is the convention of spec 4.0 and ADR 0011: a constructor
+// validates its own config, Start reports only what needs the world. The
+// message opens with the config key path, so an operator knows which YAML
+// line to edit.
 func TestTLSRejectsAHalfConfig(t *testing.T) {
 	t.Parallel()
 	certFile, keyFile := selfSignedCert(t)
@@ -189,14 +204,16 @@ func TestTLSRejectsAHalfConfig(t *testing.T) {
 			t.Parallel()
 			cfg := Config{Addr: "127.0.0.1:0"}
 			cfg.TLS.CertFile, cfg.TLS.KeyFile = tls.cert, tls.key
-			s := New(cfg, slog.New(slog.DiscardHandler))
-			deathc, err := s.Start(t.Context())
+			s, err := New(cfg, slog.New(slog.DiscardHandler))
 			if err == nil {
 				_ = s.Stop(context.Background())
-				t.Fatal("Start accepted a half-finished TLS config")
+				t.Fatal("New accepted a half-finished TLS config")
 			}
-			if deathc != nil {
-				t.Fatal("Start returned a death channel alongside its error")
+			if s != nil {
+				t.Fatal("New returned a Server alongside its error")
+			}
+			if !strings.HasPrefix(err.Error(), "web.tls: ") {
+				t.Errorf("err = %q, want it to open with the config key path", err)
 			}
 		})
 	}

@@ -72,7 +72,7 @@ type Component struct {
 // belongs to Start, which has the start timeout on its ctx.
 func New(cfg Config, log *slog.Logger) (*Component, error) {
 	if cfg.SampleRatio < 0 || cfg.SampleRatio > 1 {
-		return nil, fmt.Errorf("trace: sampleRatio %v is not a share between 0 and 1", cfg.SampleRatio)
+		return nil, fmt.Errorf("trace.sampleRatio: %v is not a share between 0 and 1", cfg.SampleRatio)
 	}
 	if log == nil {
 		log = slog.Default()

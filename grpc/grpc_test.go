@@ -114,7 +114,10 @@ func mount(t *testing.T, svc *greeter, opts func(log *slog.Logger) []connect.Han
 	}
 	app.Log = log
 
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, log)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.Use(web.DefaultMiddleware(log)...)
 	// The whole of acceptance criterion 1: the generated constructor's two
 	// return values go straight into Handle. No adapter, no second port.
@@ -504,4 +507,111 @@ func linkedModules(t *testing.T, pkg string) []string {
 		}
 	}
 	return mods
+}
+
+// wrappingGreeter is the adapter docs/spec.md 4.4 used to print, and the trap
+// 4.0 exists to name: it takes the Service Layer's error and hands it to
+// connect.NewError, which makes the error's own text the *connect.Error's
+// message.
+//
+// The sanitiser cannot help here, and not because it is weak. It passes a
+// *connect.Error through untouched ON PURPOSE, because constructing one is
+// the only way a handler can say "this text is safe to send" — see
+// TestAChosenConnectErrorStillReachesTheCaller below. Wrapping an error from
+// below in one is the handler claiming that about text it never read.
+type wrappingGreeter struct{ svc *greeter }
+
+func (g *wrappingGreeter) Greet(ctx context.Context, req *connect.Request[greetv1.GreetRequest]) (*connect.Response[greetv1.GreetResponse], error) {
+	out, err := g.svc.Greet(ctx, req.Msg.GetName())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&greetv1.GreetResponse{Greeting: out}), nil
+}
+
+func (g *wrappingGreeter) GreetStream(_ context.Context, _ *connect.Request[greetv1.GreetStreamRequest], _ *connect.ServerStream[greetv1.GreetStreamResponse]) error {
+	return connect.NewError(connect.CodeInternal, g.svc.err)
+}
+
+// serveHandler puts one connect handler behind a test server, with the
+// default options on. No App and no web.Server: what is under test here is
+// the adapter, not the mount.
+func serveHandler(t *testing.T, h http.Handler, pattern string) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.Handle(pattern, h)
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts.URL
+}
+
+// TestWrappingARawErrorDefeatsTheSanitiser is why docs/spec.md 4.0 says text
+// reaching a caller must be text the handler CHOSE, and why 4.4 no longer
+// prints connect.NewError(code, err).
+//
+// #12 measured the leak with the interceptor missing. This measures it with
+// the interceptor present and correctly wired, which is the worse case: every
+// option is on, and the password still goes out. If this test ever passes
+// without the assertion being inverted on purpose, connect has changed what
+// it sends and 4.0 should be re-read.
+func TestWrappingARawErrorDefeatsTheSanitiser(t *testing.T) {
+	t.Parallel()
+	log := slog.New(slog.DiscardHandler)
+	pattern, h := greetv1connect.NewGreetServiceHandler(
+		&wrappingGreeter{svc: &greeter{err: errors.New(leak)}}, grpc.DefaultOptions(log)...)
+	base := serveHandler(t, h, pattern)
+
+	client := greetv1connect.NewGreetServiceClient(http.DefaultClient, base)
+	_, err := client.Greet(t.Context(), connect.NewRequest(&greetv1.GreetRequest{Name: "ada"}))
+	if err == nil {
+		t.Fatal("Greet succeeded, want the handler's error")
+	}
+	if !strings.Contains(err.Error(), "password") {
+		t.Fatalf("this adapter is supposed to leak and did not: %v", err)
+	}
+}
+
+// TestTheDocumentedAdapterDoesNotLeak is the same service and the same error
+// through the adapter 4.4 now prints: return the error bare and let the
+// sanitiser own the wire. grpcGreeter is that adapter.
+func TestTheDocumentedAdapterDoesNotLeak(t *testing.T) {
+	t.Parallel()
+	log := slog.New(slog.DiscardHandler)
+	pattern, h := greetv1connect.NewGreetServiceHandler(
+		&grpcGreeter{svc: &greeter{err: errors.New(leak)}}, grpc.DefaultOptions(log)...)
+	base := serveHandler(t, h, pattern)
+
+	client := greetv1connect.NewGreetServiceClient(http.DefaultClient, base)
+	_, err := client.Greet(t.Context(), connect.NewRequest(&greetv1.GreetRequest{Name: "ada"}))
+	if err == nil {
+		t.Fatal("Greet succeeded, want the handler's error")
+	}
+	if strings.Contains(err.Error(), "password") {
+		t.Fatalf("the documented adapter leaked: %v", err)
+	}
+}
+
+// TestAChosenConnectErrorStillReachesTheCaller is the other half of the rule,
+// and it is why the sanitiser must NOT strip every *connect.Error. A handler
+// that writes its own text is telling the caller something useful, and that
+// text has to arrive — exactly as web.WriteProblem's detail arrives.
+func TestAChosenConnectErrorStillReachesTheCaller(t *testing.T) {
+	t.Parallel()
+	log := slog.New(slog.DiscardHandler)
+	chosen := connect.NewError(connect.CodeInvalidArgument, errors.New("name must not be empty"))
+	pattern, h := greetv1connect.NewGreetServiceHandler(
+		&grpcGreeter{svc: &greeter{err: chosen}}, grpc.DefaultOptions(log)...)
+	base := serveHandler(t, h, pattern)
+
+	client := greetv1connect.NewGreetServiceClient(http.DefaultClient, base)
+	_, err := client.Greet(t.Context(), connect.NewRequest(&greetv1.GreetRequest{Name: "ada"}))
+	if err == nil {
+		t.Fatal("Greet succeeded, want the handler's error")
+	}
+	if !strings.Contains(err.Error(), "name must not be empty") {
+		t.Errorf("the handler's chosen text did not reach the caller: %v", err)
+	}
+	if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+		t.Errorf("code = %v, want %v", got, connect.CodeInvalidArgument)
+	}
 }

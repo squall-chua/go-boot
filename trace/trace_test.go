@@ -136,7 +136,10 @@ func TestAPanickingHandlerStillGetsItsRouteName(t *testing.T) {
 	spans.Reset()
 	log := newLogSink()
 
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.Use(trace.DefaultMiddleware(log.logger)...)
 	srv.HandleFunc("GET /boom/{id}", func(http.ResponseWriter, *http.Request) {
 		panic("handler exploded")
@@ -341,7 +344,10 @@ func linkedModules(t *testing.T, pkg string) []string {
 // test is the one web.Server.Start builds rather than one the test rebuilt.
 func serve(t *testing.T, use func(*web.Server)) string {
 	t.Helper()
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	use(srv)
 	srv.HandleFunc("GET /hello/{name}", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "hello "+r.PathValue("name"))

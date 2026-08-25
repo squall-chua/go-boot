@@ -125,7 +125,10 @@ func h2cClient() *http.Client {
 func serve(t *testing.T, filter bool) string {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, log)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if filter {
 		srv.Use(trace.DefaultMiddleware(log)...)
 	} else {

@@ -84,13 +84,21 @@ type Actuator struct {
 }
 
 // New takes the App because it pulls the App's Checks, logger and log level
-// out of it. It cannot fail: a bad whitelist is reported by Start, which
-// returns an error already.
-func New(cfg Config, app *goboot.App) *Actuator {
+// out of it.
+//
+// It validates its own config and returns an error if the expose whitelist
+// names an endpoint that does not exist; Start reports only what needs the
+// world, which here is binding the private listener. That split is the
+// convention of docs/spec.md 4.0 and ADR 0011.
+func New(cfg Config, app *goboot.App) (*Actuator, error) {
 	if len(cfg.Expose) == 0 {
 		cfg.Expose = []string{"livez", "readyz", "info"}
 	}
-	return &Actuator{cfg: cfg, app: app, errc: make(chan error, 1)}
+	a := &Actuator{cfg: cfg, app: app, errc: make(chan error, 1)}
+	if err := a.validate(); err != nil {
+		return nil, err
+	}
+	return a, nil
 }
 
 // MountOn registers the whitelisted endpoints. It is one line in main that is
@@ -112,8 +120,8 @@ func (a *Actuator) MountOn(h Handler) {
 	a.routes(h)
 }
 
-// routes registers whatever the whitelist names. An entry that names nothing
-// is skipped here and reported by Start.
+// routes registers whatever the whitelist names. New has already rejected an
+// entry that names nothing, so nothing here is skipped silently.
 func (a *Actuator) routes(h Handler) {
 	endpoints := a.endpoints()
 	done := make(map[string]bool, len(a.cfg.Expose))
@@ -175,7 +183,9 @@ func (a *Actuator) endpoints() map[string]func(Handler) {
 }
 
 // validate rejects a whitelist entry that names no endpoint. A typo in a probe
-// path is a failure worth having at boot.
+// path is a failure worth having at boot. It runs in New, not in Start: the
+// whitelist is pure config validation and touches nothing outside Config.
+// See docs/spec.md 4.0 and ADR 0011.
 func (a *Actuator) validate() error {
 	endpoints := a.endpoints()
 	for _, name := range a.cfg.Expose {
@@ -233,6 +243,12 @@ func (a *Actuator) readyz(w http.ResponseWriter, r *http.Request) {
 // logLevel reads and writes the running level. The change reaches the live
 // logger through the slog.LevelVar the App already handed every handler, so
 // the next log line obeys it with no restart.
+//
+// Both 400s carry text this package wrote, never err.Error(). That is
+// docs/spec.md 4.0: what a caller receives is what the handler chose. The
+// json decoder and slog.Level between them would otherwise answer with
+// "http: request body too large" or slog's own wording, neither of which
+// tells the operator what to send instead.
 func logLevel(lvl *slog.LevelVar) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -246,12 +262,12 @@ func logLevel(lvl *slog.LevelVar) http.Handler {
 			// actuator.addr set there is no web Starter in front of this
 			// handler to cap it.
 			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				http.Error(w, `body must be {"level": "..."}`, http.StatusBadRequest)
 				return
 			}
 			var l slog.Level
 			if err := l.UnmarshalText([]byte(body.Level)); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				http.Error(w, "level must be one of DEBUG, INFO, WARN, ERROR", http.StatusBadRequest)
 				return
 			}
 			lvl.Set(l)
@@ -320,9 +336,6 @@ func (a *Actuator) Drain(ctx context.Context) { a.draining.Store(true) }
 // Start pulls every Component's Check. Nothing pushes: main writes no
 // registration line at all.
 func (a *Actuator) Start(ctx context.Context) (<-chan error, error) {
-	if err := a.validate(); err != nil {
-		return nil, err
-	}
 	a.checks = make(map[string]Check)
 	for name, c := range a.app.Checks() {
 		a.checks[name] = c.Check

@@ -38,8 +38,14 @@ func runExplicit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	act := actuator.New(cfg.Actuator, app)
-	srv := web.New(cfg.Web, app.Log)
+	act, err := actuator.New(cfg.Actuator, app)
+	if err != nil {
+		return err
+	}
+	srv, err := web.New(cfg.Web, app.Log)
+	if err != nil {
+		return err
+	}
 	srv.Use(trace.DefaultMiddleware(app.Log)...) // five entries, not web's three; see goboot/trace
 	act.MountOn(srv)                             // forget this and there is no /readyz
 	app.Add(act, tracer, database, srv)          // the order here is ignored; Tier decides

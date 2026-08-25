@@ -86,7 +86,10 @@ func setup(t *testing.T, cfg actuator.Config, comps ...goboot.Component) *fixtur
 	// Log is a public field, so a test can read what the Actuator writes. The
 	// level is the App's own LevelVar, which is what /actuator/loglevel sets.
 	app.Log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: app.Level}))
-	act := actuator.New(cfg, app)
+	act, err := actuator.New(cfg, app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	act.MountOn(mux)
 	app.Add(act)
@@ -151,13 +154,25 @@ func TestDefaultWhitelist(t *testing.T) {
 	}
 }
 
-// TestUnknownExposeEntryFailsStartup covers the typo in a probe path: a
-// failure worth having at boot, not at the first probe.
-func TestUnknownExposeEntryFailsStartup(t *testing.T) {
-	f := setup(t, actuator.Config{Expose: []string{"livez", "metric"}})
-	err := f.app.Start(context.Background())
-	if err == nil || !strings.Contains(err.Error(), `"metric"`) {
-		t.Fatalf("start error = %v, want one naming \"metric\"", err)
+// TestUnknownExposeEntryIsRefusedByNew covers the typo in a probe path: a
+// failure worth having at boot, not at the first probe. New and not Start is
+// the convention of spec 4.0 and ADR 0011 — the whitelist is pure config
+// validation, so it is checked before anything is built. The message opens
+// with the config key path, so an operator knows which YAML line to edit.
+func TestUnknownExposeEntryIsRefusedByNew(t *testing.T) {
+	app, err := goboot.New(goboot.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act, err := actuator.New(actuator.Config{Expose: []string{"livez", "metric"}}, app)
+	if err == nil {
+		t.Fatal("New accepted an expose entry naming no endpoint")
+	}
+	if act != nil {
+		t.Fatal("New returned an Actuator alongside its error")
+	}
+	if !strings.HasPrefix(err.Error(), "actuator.expose: ") || !strings.Contains(err.Error(), `"metric"`) {
+		t.Errorf(`err = %q, want it to open with "actuator.expose: " and name "metric"`, err)
 	}
 }
 
@@ -297,6 +312,40 @@ func TestMetricsServesTheDefaultRegistry(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "go_goroutines") {
 		t.Error("the default registry's go_goroutines is missing")
+	}
+}
+
+// TestLogLevelRejectsWithItsOwnWords is docs/spec.md 4.0 applied to the one
+// place in go-boot that answers a caller with an error body outside
+// goboot/web: what the caller receives is text this package wrote. Before #38
+// both branches answered with err.Error(), which handed the caller slog's
+// wording or "http: request body too large" — neither of which says what to
+// send instead.
+func TestLogLevelRejectsWithItsOwnWords(t *testing.T) {
+	f := setup(t, actuator.Config{Expose: []string{"loglevel"}})
+	f.start(t)
+
+	for name, tc := range map[string]struct{ body, want string }{
+		"not json":     {`{`, `body must be {"level": "..."}`},
+		"body too big": {`{"level":"` + strings.Repeat("x", 2<<10) + `"}`, `body must be {"level": "..."}`},
+		"not a level":  {`{"level":"chatty"}`, "level must be one of DEBUG, INFO, WARN, ERROR"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			put := httptest.NewRequest(http.MethodPut, "/actuator/loglevel", strings.NewReader(tc.body))
+			rec := f.do(put)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("PUT = %d, want 400", rec.Code)
+			}
+			if got := strings.TrimSpace(rec.Body.String()); got != tc.want {
+				t.Errorf("body = %q, want %q", got, tc.want)
+			}
+			// The words below the boundary must not be among the words above it.
+			for _, leaked := range []string{"slog:", "http:", "json:"} {
+				if strings.Contains(rec.Body.String(), leaked) {
+					t.Errorf("the body carries text from below: %q", rec.Body.String())
+				}
+			}
+		})
 	}
 }
 

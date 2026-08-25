@@ -44,7 +44,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	srv := web.New(web.Config{Addr: ":8080"}, app.Log)
+	srv, err := web.New(web.Config{Addr: ":8080"}, app.Log)
+	if err != nil {
+		log.Fatal(err)
+	}
 	srv.Use(web.DefaultMiddleware(app.Log)...)
 	srv.HandleFunc("GET /hello", func(w http.ResponseWriter, r *http.Request) {
 		web.WriteJSON(w, http.StatusOK, map[string]string{"hello": "world"})
@@ -95,7 +98,10 @@ field rejection and readable errors that `json.NewDecoder(r.Body).Decode` leaves
 has nothing to leak. This is the one thing that surprises people, so it is said first.
 
 ```go
-act := actuator.New(cfg.Actuator, app)
+act, err := actuator.New(cfg.Actuator, app)   // an expose typo is refused here
+if err != nil {
+	return err
+}
 act.MountOn(srv)   // the same line whether actuator.addr is set or not
 app.Add(act, srv)
 ```
@@ -167,13 +173,18 @@ type grpcGreeter struct{ svc *greeter }
 func (g *grpcGreeter) Greet(ctx context.Context, req *connect.Request[greetv1.GreetRequest]) (*connect.Response[greetv1.GreetResponse], error) {
 	out, err := g.svc.Greet(ctx, req.Msg.GetName())
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, err // bare: the sanitiser owns what the caller sees
 	}
 	return connect.NewResponse(&greetv1.GreetResponse{Greeting: out}), nil
 }
 ```
 
 The Service Layer stays free of connect, and both Transports call the same `greeter`.
+
+**Return the error bare.** `connect.NewError(connect.CodeInternal, err)` looks tidier and it is the
+leak: it makes `err`'s own text the message your caller receives, and the sanitiser below passes a
+`*connect.Error` through untouched by design. To tell a caller something useful, write the words
+yourself — `connect.NewError(connect.CodeInvalidArgument, errors.New("name must not be empty"))`.
 
 ### The default options
 
@@ -187,7 +198,10 @@ Three entries: panic recovery, the error sanitiser, and connect's required proto
 the caller **verbatim**. Measured: `pq: password authentication failed for user "app" at
 10.0.0.5:5432` went out on the wire, host and username and all. The sanitiser replaces anything
 that is not already a `*connect.Error` with a bare `CodeUnknown` and logs the real one. An error you
-built yourself with `connect.NewError` passes through untouched.
+built yourself with `connect.NewError` passes through untouched, which is what lets a handler send
+a caller a useful message — and is also why wrapping an error from below in one defeats the whole
+thing. The same rule holds on the HTTP side: `WriteProblem`'s `detail` is a string you wrote, never
+`err.Error()`.
 
 There is **no logging or request-ID interceptor**, and that is not an omission. Under the shared
 listener `web.DefaultMiddleware` has already run, so `goboot.LoggerFrom(ctx)` and the request ID

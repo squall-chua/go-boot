@@ -52,12 +52,18 @@ func mount(t *testing.T, drainDelay time.Duration, comps ...goboot.Component) (s
 	}
 	app.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The whole of the mounting story: the pair New returns goes straight
 	// into Handle, exactly like a generated connect service.
 	srv.Handle(health.New(app))
 
-	act := actuator.New(actuator.Config{}, app)
+	act, err := actuator.New(actuator.Config{}, app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	act.MountOn(srv)
 
 	app.Add(comps...)

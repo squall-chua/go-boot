@@ -317,7 +317,10 @@ func TestReadinessFollowsTheDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	act := actuator.New(actuator.Config{}, app)
+	act, err := actuator.New(actuator.Config{}, app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A plain ServeMux satisfies actuator.Handler, so this test needs no
 	// Transport Starter at all.
 	mux := http.NewServeMux()

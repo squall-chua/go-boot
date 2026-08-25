@@ -25,7 +25,10 @@ func TestServeOneRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.HandleFunc("GET /hello", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "hello")
 	})
@@ -70,7 +73,10 @@ func TestPortZeroIsResolved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	app.Add(srv)
 	if got := srv.Addr(); got != "127.0.0.1:0" {
 		t.Fatalf("Addr() before Start = %q, want the configured address", got)
@@ -110,7 +116,10 @@ func TestUseOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.Use(tag(&mu, &order, "a"), tag(&mu, &order, "b"))
 	srv.Use(tag(&mu, &order, "late"))
 	srv.HandleFunc("GET /x", func(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +159,10 @@ func TestCleartextHTTP2IsOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.HandleFunc("GET /hello", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, r.Proto)
 	})
@@ -187,7 +199,10 @@ func TestHTTP1StillWorks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	srv, err := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.HandleFunc("GET /hello", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, r.Proto)
 	})

@@ -25,7 +25,10 @@ func TestPrivateListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := New(Config{Addr: "127.0.0.1:0"}, app)
+	a, err := New(Config{Addr: "127.0.0.1:0"}, app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	a.MountOn(mux)
 	app.Add(a)
