@@ -5,7 +5,9 @@ which is the last ticket on the map ([#1](https://github.com/squall-chua/go-boot
 
 "Locked" means every design decision here is settled and written down. Building go-boot v1 is
 typing, not deciding. Anything still open is listed in
-[11. Deferred past v1](#11-deferred-past-v1), and nothing in the rest of this file depends on it.
+[11. Deferred past v1](#11-deferred-past-v1), and no part of *building* v1 depends on it. One
+part of *tagging* it does: [12. Versioning and release policy](#12-versioning-and-release-policy)
+gates `v1.0.0` on the error-handling convention, and says why.
 
 **How to read this file.** Each part says what the code must do and names the ticket that settled
 it. The reasons are not repeated here — they live in the ticket and, where a decision is hard to
@@ -1470,7 +1472,8 @@ had to add for Java.
 
 ## 11. Deferred past v1
 
-In scope for go-boot, but not in this spec and not blocking it.
+In scope for go-boot, but not in this spec and not blocking the *building* of v1. One of them
+blocks the *tagging* of it, and says so on its own line.
 
 - **Security Starter** — authentication, authorization, JWT, OAuth2 resource server, security
   headers. It owns the ground `goboot/web` deliberately left empty. Too large to phrase sharply
@@ -1486,11 +1489,169 @@ In scope for go-boot, but not in this spec and not blocking it.
   the `version` column and the `ddl-auto=validate` CI job. Only the `version` column is
   JPA-specific — the rest is right for everyone, so most of it should be the default rather than a
   flag.
-- **Error handling convention across go-boot** — sentinel errors, wrapping, what a Starter returns
-  on misconfiguration, and whether a go-boot error type exists at all. Both #11 and #12 deferred it
-  here deliberately: settle it once for HTTP and gRPC together, not twice.
-- **Versioning and release policy** — one tag for one module, and what stability v1 promises.
+- **Error handling convention across go-boot**
+  ([#38](https://github.com/squall-chua/go-boot/issues/38)) — sentinel errors, wrapping, what a
+  Starter returns on misconfiguration, and whether a go-boot error type exists at all. Both #11
+  and #12 deferred it here deliberately: settle it once for HTTP and gRPC together, not twice.
+  **This is the one item on this list that gates the `v1.0.0` tag**, because it is the only one
+  that can still change the surface of an existing Starter — see
+  [12. Versioning and release policy](#12-versioning-and-release-policy).
 - **Docs and examples strategy** — how a newcomer learns this in ten minutes.
+
+---
+
+## 12. Versioning and release policy
+
+Settled by [#39](https://github.com/squall-chua/go-boot/issues/39). This section is the whole
+policy: follow it and a tag can be cut with nothing left to decide.
+
+### One tag covers every Starter
+
+go-boot is **one Go module** ([1. Ground rules](#1-ground-rules)), so there is **one tag**, and it
+covers all twelve packages at once. A fix in `goboot/db` bumps the version number a root-only user
+sees, even though nothing they import changed. That is the price of the one-module layout, and
+[#3](https://github.com/squall-chua/go-boot/issues/3) measured it as small: a root-only consumer
+downloads 1 zip and 2.9 KB, so the upgrade they did not need is an upgrade they barely pay for.
+
+The reverse also holds, and it is the part to say out loud: **a user cannot pin one Starter to an
+older version than another.** There is one version number for the whole library. Anyone who needs
+otherwise is asking for the multi-module layout #3 refused.
+
+### The public surface is these twelve packages
+
+`goboot`, `goboot/actuator`, `goboot/web`, `goboot/grpc`, `goboot/grpc/health`,
+`goboot/grpc/reflection`, `goboot/db`, `goboot/db/dbtest`, `goboot/trace`, `goboot/trace/rpc`,
+`goboot/preset` and `goboot/preset/traced`. Every exported identifier in them is covered by the
+promise below. `goboot/db/dbtest` is on the list and not an afterthought: go-boot's own tests use
+it, so it is shipped code a user may reasonably build on.
+
+Three things in the repository are **not** surface, and each is excluded by a mechanism rather than
+by a sentence, so it cannot drift. `internal/` is excluded by the Go compiler. `examples/` are
+`package main` and cannot be imported. `prototypes/` carries its own `go.mod`, so it is a separate
+module and ships to nobody.
+
+Surface is not only Go identifiers. **The config keys of [3. Config](#3-config) and their default
+values, and the Actuator's endpoint paths and response bodies, are surface too** — an operator's
+dashboard breaks on a renamed JSON field exactly as a compile breaks on a renamed function.
+
+A new package cannot appear unnoticed: `.github/check-imports.sh` reads the package list from
+`go list ./...` and pins one row per package in `.github/module-counts.txt`, regenerated only by
+`--update`, so **a new package fails CI until someone updates the golden file**
+([8.1](#81-the-import-leak-check)). Nothing ties that file to the twelve names written above,
+though, so **whoever updates it updates this list in the same commit.**
+
+### The line before v1 is `v0.x`
+
+**Cut `v0.1.0` from `main` now.** Go treats a `v0` major as unstable by rule and this policy does
+not pretend otherwise:
+
+- **A `v0` minor bump may break anything, and is also how anything is added.** Every break is
+  named in the release note, with the line a user has to change.
+- **A `v0` patch bump neither breaks nor adds.** Bug fixes only.
+
+The `v0` line exists for one reason, named in [the gate below](#the-one-thing-that-gates-v100), and
+it ends as soon as that reason does.
+
+### What a `v1.x` tag promises
+
+Once `v1.0.0` is cut, for the whole life of `v1`:
+
+- **No exported identifier in the twelve packages is removed or renamed, and no function or method
+  signature changes.**
+- **No config key is removed or renamed, and no default value changes.** `maxOpenConns` is still
+  `10` on the last `v1` release. A silently improved default moves a production knob its owner
+  never touched, which is worse than a bad default they can see. A better default is a `v2` change,
+  or a new key.
+- **A minor release may add**: exported identifiers, whole packages, and config keys whose default
+  preserves today's behaviour.
+- **A patch release fixes bugs and nothing else.**
+- **If a break ever becomes necessary it is `github.com/squall-chua/go-boot/v2`** — a different
+  import path, so no user is broken by an upgrade they did not type.
+
+**Preset bodies are the one deliberate exception, and it is the product, not a loophole.**
+`preset.Full` and `traced.Full` keep their signatures for the life of `v1`, but **what they wire
+may grow in a minor release** — a fourth default middleware, a new Component. ADR `0010` and the
+README already promise exactly this: wiring held in a Preset gets fixed by `go get -u`, and that is
+the only argument the Preset survives on. The signature is the promise; the body is not. A user who
+needs the body frozen copies it into their own `main`, which ADR `0010` already names as the
+supported escape hatch. Every change to a Preset body is named in the release note.
+
+### What the promise does not cover
+
+Named here so nobody has to infer them from silence.
+
+- **The wording of log messages.** The access log's fields are stable; its prose is not.
+- **The Go version floor.** It may rise in a minor release, the way Go's own modules raise theirs.
+  Today it is the `go 1.25.7` in `go.mod`, not the `1.25.0` of §1's bold rule — see the note under
+  it in [1. Ground rules](#1-ground-rules). A move is named in the release note.
+- **Dependency versions.** Any dependency in [7. Dependencies](#7-dependencies-and-the-ticket-that-chose-each-one)
+  may be bumped in a minor release. A *new* dependency still obeys the optional-subpackage rule, and
+  shows up as a `.github/module-counts.txt` change either way, so it cannot arrive quietly.
+- **Six of the eight gaps of [9. Known gaps in v1](#9-known-gaps-in-v1).** All eight ship **with**
+  `v1` rather than blocking it. Closing one is a minor release **only where the fix adds something
+  or repairs a bug** — for several of those the gap *is* the current behaviour, the access log that
+  records 200 for a failed gRPC call being the sharp case, so the fix changes what an operator
+  sees and belongs in the release note.
+  **Two of the eight cannot be closed inside `v1` at all**, because the rules above forbid it:
+  `maxOpenConns: 10` is a default value, and splitting the Actuator's Prometheus weight into
+  `goboot/actuator/metrics` would need a second mount line in the user's own `main`. Both wait
+  for `v2`. They are gaps go-boot has decided to live with for the life of `v1`, and the release
+  note says that rather than implying a fix is coming.
+
+### The one thing that gates `v1.0.0`
+
+Of the six items still in [11. Deferred past v1](#11-deferred-past-v1), five are **additive**: the
+Security, Messaging and Cache Starters are new packages, the Scaffold is a separate binary, and the
+docs strategy is not code. A `v1` minor release can carry any of them.
+
+**Exactly one can still change the surface of an existing Starter: the error-handling convention**
+([#38](https://github.com/squall-chua/go-boot/issues/38)).
+It decides what every Starter returns on misconfiguration and whether a go-boot error type exists
+at all — a signature question across all twelve packages. Freezing the surface before it lands
+would freeze it wrong, and the only way out of that is a `v2` on a library that has barely shipped.
+
+So the gate is one sentence, and it is checkable rather than a judgement call:
+
+> **`v1.0.0` is cut from the first `v0` release that ships the settled error-handling convention
+> of [#38](https://github.com/squall-chua/go-boot/issues/38)**, with the checklist below green.
+
+**Settled** means the same here as everywhere else in this file, so it is a fact to look up rather
+than a judgement to make: **[#38](https://github.com/squall-chua/go-boot/issues/38) is closed**,
+and this spec has a section stating what it settled. Until both are true, the answer to "can we
+tag `v1.0.0`" is no. Nothing else on the deferred list gates it.
+
+### The release checklist
+
+The same five steps for every tag, `v0` and `v1` alike.
+
+1. **CI green on `main`**: the four ordinary gates of [8.3](#83-the-ordinary-gates), the import-leak
+   check of [8.1](#81-the-import-leak-check), both Preset forms of [8.2](#82-ci-builds-both-forms-of-every-preset),
+   and the query-layer neutrality build of ADR `0009`.
+2. **`.github/module-counts.txt` is unchanged**, or its change is deliberate and named in the
+   release note.
+3. **The release note is written** as the body of a GitHub Release —
+   `gh release create vX.Y.Z --notes-file ...` — carrying everything in the list below. There is
+   no `CHANGELOG.md`: the tag and its notes are one object, and the issue tracker is already on
+   GitHub.
+4. **Tag `main` directly**: `git tag vX.Y.Z && git push origin vX.Y.Z`. There is no release branch —
+   go-boot commits to `main`, and one module with one tag has nothing to branch for.
+5. **Confirm the proxy serves it**:
+   `GOPROXY=https://proxy.golang.org go list -m github.com/squall-chua/go-boot@vX.Y.Z`.
+
+### What every release note carries
+
+The first four are per-release. The last is on **every** note, unchanged, because these are the two
+numbers an operator otherwise discovers at scale.
+
+- **Every break**, with the line a user has to change. On a `v1` release this list is empty by
+  definition; if it is not, the tag is wrong.
+- **Every Preset body change**, because a Preset user's wiring changed without their `main` changing.
+- **Every gap of §9 that was closed**, plus the §9 list as it still stands. The remaining gaps ship
+  with the release; they belong in the note, not in a file the operator finds afterwards.
+- **The Go version floor, if it moved.**
+- **These two numbers, every time**: `/actuator/metrics` answers **404 until `metrics` is named in
+  `actuator.expose`**, and **`maxOpenConns: 10` is ten pods** against a stock PostgreSQL, which
+  allows about 97 connections.
 
 ---
 
