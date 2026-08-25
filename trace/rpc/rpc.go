@@ -5,7 +5,7 @@
 // subpackage of go-boot. Go links by import, so a dependency only some users
 // need lives in a package they must import.
 //
-// # No RPC metrics in v1, on purpose
+// # No metrics from here, on purpose
 //
 // otelconnect emits metrics as well as spans, and these options turn the
 // metrics off. The reason is that they would go into the OTel pipeline, and
@@ -14,10 +14,11 @@
 // metrics, OTel for traces — and half a metric surface, visible only to
 // whoever runs the collector, is worse than none.
 //
-// The cost is real and it is written down as a known gap: v1 reports no RPC
-// count and no RPC latency by procedure. RPCs get spans, and a span carries
-// the duration and the status code, so the data is there per request; what is
-// missing is the aggregate.
+// #41 settled that split as a rule and gave the metrics half its own writer:
+// goboot/grpc/metrics registers an RPC counter and histogram by procedure on
+// the Prometheus default registry, which is the one the Actuator serves. It
+// needs neither this package nor a collector, so nothing here changes and
+// WithoutMetrics stays. See docs/spec.md 4.2.
 package rpc
 
 import (

@@ -268,6 +268,38 @@ no registry of what has been mounted. That is also why it is `MountOn` rather th
 The package is called `reflection` and not `reflect`, so a `main` that imports the standard
 library's `reflect` never has to alias one of them.
 
+### Counting and timing RPCs
+
+A third package, `goboot/grpc/metrics`, opt-in by import like the two above. It answers "how many
+of my RPCs failed, and how slow are they" from the endpoint that already answers everything else:
+
+```go
+srv.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc},
+	append(grpc.DefaultOptions(app.Log), metrics.Options()...)...))
+```
+
+Two metrics, both labelled `procedure` and `code`, both registered on the Prometheus default
+registry, so both appear at `/actuator/metrics` once `metrics` is named in `actuator.expose`:
+
+| Metric                 | Type      | What it answers                       |
+| ---------------------- | --------- | ------------------------------------- |
+| `rpc_requests_total`   | counter   | How many, and how many of them failed |
+| `rpc_duration_seconds` | histogram | How slow, at a quantile               |
+
+**`code` is the code the caller received**, so `ok`, `not_found`, `unknown` and the rest. A bare
+`error` from a handler counts as `unknown`, because that is what the sanitiser sends. A panicking
+handler counts as `internal`, and is counted at all only because the interceptor records in a
+`defer`: `connect.WithRecover` wraps it, so a panic would otherwise unwind straight past the
+counter and the failure nobody wants to miss would be the one failure not recorded.
+
+The exception is `http.ErrAbortHandler`, which is a handler saying "drop this connection quietly".
+It is passed through uncounted, because that is what every other layer does with it — the access
+log writes no line for it either.
+
+**This is the only metrics pipeline.** Prometheus owns every metric go-boot emits and OTel owns
+traces, so an operator asking one question looks in one place. This package needs neither tracing
+nor a collector.
+
 ### Codegen
 
 go-boot requires nothing. It never runs codegen and never imports your generated code — you pass
@@ -339,7 +371,7 @@ The access-log line carries `traceId` and `spanId` because `trace.DefaultMiddlew
 `web.Logging` a logger wrapped by `trace.WithIDs`. Both that and `trace.IsRPC` are exported so the
 slice stays one you can rebuild by hand, not hidden behaviour.
 
-### RPCs get one span, and no metrics
+### RPCs get one span
 
 `goboot/trace/rpc` holds the connect instrumentation, opt-in by import the same way:
 
@@ -358,12 +390,12 @@ guess at the path: the content type starts with `application/grpc`, **or** a
 `Connect-Protocol-Version` header is present. That covers all four protocols connect speaks, and a
 service with no gRPC never sees either header.
 
-**v1 ships no RPC metrics**, and this is a known gap rather than an oversight. `otelconnect` can
-emit them, but into the OTel pipeline, where `/actuator/metrics` — which reads the Prometheus
-registry — cannot see them. go-boot runs two pipelines on purpose, Prometheus for metrics and OTel
-for traces, and half a metric surface visible only to whoever runs the collector is worse than
-none. So there is no RPC count and no RPC latency by procedure. Spans carry the duration and the
-status code, so the data is there per request; the aggregate is what is missing.
+**Metrics do not come from here.** `otelconnect` can emit them, but into the OTel pipeline, where
+`/actuator/metrics` — which reads the Prometheus registry — cannot see them. go-boot runs two
+pipelines on purpose, Prometheus for metrics and OTel for traces, so this package passes
+`otelconnect.WithoutMetrics()` and the RPC counter and histogram live in `goboot/grpc/metrics`
+instead, on the registry the Actuator serves. That package needs no tracing and no collector: see
+[Counting and timing RPCs](#counting-and-timing-rpcs).
 
 ## The database
 

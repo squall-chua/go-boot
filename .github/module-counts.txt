@@ -5,6 +5,7 @@ goboot/db                 7  24
 goboot/db/dbtest         15  15
 goboot/grpc               4   4
 goboot/grpc/health        5  13
+goboot/grpc/metrics      10  12
 goboot/grpc/reflection    3   5
 goboot/preset            16  16
 goboot/preset/traced     36  36
