@@ -1027,15 +1027,18 @@ a service adds one key of its own — which is every real service.
 
 ### How to sell the Preset, and how not to
 
-**Do not sell it on the line count.** Counted, not quoted from memory:
+**Do not sell it on the line count.**
 
-| variant | Preset wiring | explicit wiring |
-|---|---:|---:|
-| `http-only` | — | 8 |
-| `http-actuator-config` | — | 14 |
-| `full` | **9** | **22** |
+> **Amended by [#31](https://github.com/squall-chua/go-boot/issues/31).** A table of wiring lines
+> per variant stood here — 8 for `http-only`, 14 for `http-actuator-config`, and 9 against 22 for
+> `full`, "13 lines saved, 59%". Counted again on the real `examples/`, under the one rule that
+> still reproduces `http-only` at 8, `http-actuator-config` comes out at **13** and `full` at **10**
+> against **21**. Every other row is out by one, and not in the same direction, so no single
+> counting rule fits all three. The table is deleted rather than corrected, and it costs nothing to
+> lose: this section already forbids selling the Preset on the number, and #31 made that a rule the
+> documentation has to keep.
 
-That is 13 lines saved, 59%. #2 Q22 rejected line count as the yardstick, and under its actual test
+#2 Q22 rejected line count as the yardstick, and under its actual test
 — *name a rule the Preset encodes that a developer would otherwise get wrong* — only **two** rules
 survive, both one-liners:
 
@@ -1047,30 +1050,40 @@ survive, both one-liners:
 **The argument that carries the Preset is the upgrade path: wiring held in a Preset gets fixed by
 `go get -u`; wiring held in the user's `main` does not.** If go-boot later learns that a fourth
 middleware belongs in the default set, every Preset user picks it up by bumping a version. That is
-why "let the Scaffold write the 22 lines into `main`" was rejected — it loses nothing today and
-everything on upgrade.
+why "let the Scaffold write the explicit lines into `main`" was rejected — it loses nothing today
+and everything on upgrade.
 
-**And go-boot should promise *one call*, not *one line*.** That is what the numbers support and
-what the call site actually looks like.
+**And go-boot should promise *one call*, not *one line*.** That is what the call site actually
+looks like.
 
 ### The copy must compile
 
 **For every Preset, one example directory holding both forms, and CI builds both.**
-`prototypes/cmd/full/` is the working shape: `main.go` calls `traced.Full`, `explicit.go` is the 22
-lines it expands to, and the two are kept honest by the compiler rather than by a doc page. A doc
-snippet rots; a build failure does not. Since a Preset has no options, copying the body is the only
-escape hatch, which makes the copy load-bearing.
+`examples/full/` is the shape: `main.go` calls `traced.Full`, `explicit.go` is what it expands to,
+and the two are kept honest by the compiler rather than by a doc page. A doc snippet rots; a build
+failure does not. Since a Preset has no options, copying the body is the only escape hatch, which
+makes the copy load-bearing.
+
+> **Amended by [#31](https://github.com/squall-chua/go-boot/issues/31).** This named
+> `prototypes/cmd/full/` until the real one existed. `examples/full/` goes further than the
+> compiler: one test drives BOTH forms against a real PostgreSQL and asserts they serve the same
+> service, so a copy that still builds but no longer matches the Preset fails too.
 
 ---
 
 ## 6. The `main.go` a developer writes
 
-Three variants, all compiling in `prototypes/cmd/`. **`cmd/full` compiles and vets but has never
-been run** — it needs a Postgres. That has been true since #2.
+Three variants, all compiling in `examples/`.
+
+> **Amended by [#31](https://github.com/squall-chua/go-boot/issues/31).** This read "all compiling
+> in `prototypes/cmd/`", and **"`cmd/full` compiles and vets but has never been run — it needs a
+> Postgres. That has been true since #2."** It is no longer true. `examples/full` is run, in both
+> forms, by `TestBothFormsServeTheSameService`, against a real PostgreSQL from `goboot/db/dbtest` —
+> which is the package that removed the reason it had never been run.
 
 ### 6.1 `http-only` — no Preset form, and that is the point
 
-8 wiring lines. There is no Preset for this shape, because one came out longer than the body.
+There is no Preset for this shape, because one came out longer than the body.
 
 ```go
 func run(ctx context.Context) error {
@@ -1090,7 +1103,7 @@ func run(ctx context.Context) error {
 
 ### 6.2 `http-actuator-config` — the realistic default
 
-14 wiring lines. One Transport, an Actuator, and the service's own config key. No Preset form.
+One Transport, an Actuator, and the service's own config key. No Preset form.
 
 ```go
 //go:embed app.yaml
@@ -1128,8 +1141,9 @@ func run(ctx context.Context) error {
 
 ### 6.3 `full` — the whole v1 surface, both forms
 
-HTTP, gRPC, database, Actuator and tracing. **9 wiring lines by Preset, 22 explicit.** Both forms
-live in the same directory and CI builds both.
+HTTP, gRPC, database, Actuator and tracing. The Preset form is shorter, and #31 deleted the count
+that used to be quoted here — see [5. The Presets](#5-the-presets-and-what-each-wires). Both forms
+live in the same directory, CI builds both, and one test drives both.
 
 Preset form:
 
@@ -1216,19 +1230,29 @@ func (g *greeter) Greet(ctx context.Context, name string) (string, error)
 
 ### Measured weight of the three variants
 
-Stripped, `go build -ldflags="-s -w"`, counting linked non-stdlib module roots.
+Stripped, `go build -ldflags="-s -w"`, counting linked non-stdlib module roots and not counting
+go-boot itself.
 
-| binary | modules | bytes |
-|---|---:|---:|
-| `cmd/http-only` | 1 | 6,414,601 |
-| `cmd/http-actuator-config` | 10 | 9,363,721 |
-| `cmd/full` | 21 | 14,405,897 |
+| binary | modules | bytes | stripped |
+|---|---:|---:|---:|
+| `examples/http-only` | 2 | 6,807,817 | 6.49 MB |
+| `examples/http-actuator-config` | 11 | 11,628,809 | 11.09 MB |
+| `examples/full` | 41 | 22,831,369 | 21.77 MB |
 
-**Caveat when quoting these:** `prototypes/goboot/trace` is signature-only and imports no OTel. The
-numbers above measure call-site shape, which is real. The weight that puts tracing in its own
-Starter was **#10's** measurement, not the prototype's, and
-[#30](https://github.com/squall-chua/go-boot/issues/30) has since measured the real Starter at
-**+9.69 MB and +23 modules**. See [4.6](#46-goboottrace).
+> **Re-measured by [#31](https://github.com/squall-chua/go-boot/issues/31).** These were the
+> prototype's: 1 module and 6,414,601 bytes, 10 and 9,363,721, 21 and 14,405,897. They came with a
+> caveat that `prototypes/goboot/trace` was signature-only and imported no OTel, so the `cmd/full`
+> row measured call-site shape rather than weight. With the Presets landed there is a real
+> `examples/full` to build, and the row it was warning about grew hard: **21 modules became 41, and
+> 13.74 MB became 21.77 MB.** That gap is [#30](https://github.com/squall-chua/go-boot/issues/30)'s
+> tracing Starter arriving for real — it measured +9.69 MB and +23 modules — plus the driver and
+> the generated gRPC code the prototype also only stubbed. See [4.6](#46-goboottrace).
+>
+> The two lighter rows are unchanged from
+> [#25](https://github.com/squall-chua/go-boot/issues/25), to the byte: it measured `http-only` at
+> 6.49 MB and 2 modules, and the Actuator taking it to 11.09 MB and 11. Two independent
+> measurements agreeing is what fixes the counting rule stated above, which the prototype's
+> `http-only = 1` did not follow.
 
 ---
 
