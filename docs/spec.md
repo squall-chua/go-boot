@@ -628,7 +628,8 @@ is one service per process, so nobody pays it.
 
 **Prometheus owns every metric go-boot emits. OTel owns traces and nothing else.** Settled by
 [#41](https://github.com/squall-chua/go-boot/issues/41), which had to choose a pipeline before it
-could add a single RPC counter. The rule is one sentence so it can be applied without re-deciding:
+could add a single RPC counter. ADR `0012`, with the measurements that refused the alternatives.
+The rule is one sentence so it can be applied without re-deciding:
 **a metric go-boot ships is registered on `prometheus.DefaultRegisterer` and is readable at
 `/actuator/metrics`.** An operator asking "how many of my RPCs failed" has one place to look, and
 that stays true when HTTP request metrics are added later.
@@ -926,7 +927,7 @@ work with no config.
 #### `goboot/grpc/metrics`
 
 Opt-in by import, the same as the two above. Settled by
-[#41](https://github.com/squall-chua/go-boot/issues/41), under the pipeline rule in
+[#41](https://github.com/squall-chua/go-boot/issues/41). ADR `0012`. Under the pipeline rule in
 [4.2](#42-gobootactuator): the metrics are registered on `prometheus.DefaultRegisterer`, so they
 are served by `/actuator/metrics` and by nothing else.
 
