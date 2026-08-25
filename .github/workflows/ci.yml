@@ -28,6 +28,21 @@ jobs:
       - name: build
         run: go build ./...
 
+      - name: base imports no Starter
+        # Assertion 1 of the import-leak check in docs/spec.md 8.1. go list
+        # -deps alone misses test imports, and it is test imports that go mod
+        # tidy leaks through, so ask for them by name. The other three
+        # assertions, and the golden module counts, are #32.
+        run: |
+          leaks="$(go list -f '{{join .Imports "\n"}}{{"\n"}}{{join .TestImports "\n"}}{{"\n"}}{{join .XTestImports "\n"}}' . \
+            | grep '^github.com/squall-chua/go-boot/' || true)"
+          if [ -n "$leaks" ]; then
+            echo "the base package or its tests import a Starter:"
+            echo "$leaks" | sort -u
+            exit 1
+          fi
+          echo "base package and its tests import no Starter"
+
       - name: vet
         run: go vet ./...
 
