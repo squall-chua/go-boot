@@ -1154,8 +1154,16 @@ pinning.
 | `connectrpc.com/otelconnect` | v0.9.0 | `goboot/trace/rpc` | [#12](https://github.com/squall-chua/go-boot/issues/12) | RPC spans. Separate subpackage, and `goboot/trace` filters `otelhttp` for RPCs or you get two nested spans |
 | `github.com/fergusstrange/embedded-postgres` | v1.34.0 | `goboot/db/dbtest` | [#13](https://github.com/squall-chua/go-boot/issues/13) | 3 linked modules against `testcontainers-go`'s 45, and no Docker daemon. Real PostgreSQL 18.3 up in 2.77s |
 
-**No database driver is a go-boot dependency.** The user blank-imports their own. `pgx/v5/stdlib`
-is +7.64 MB.
+**No database driver is linked by a go-boot Starter.** The user blank-imports their own.
+`pgx/v5/stdlib` is +7.64 MB.
+
+> **Amended by [#26](https://github.com/squall-chua/go-boot/issues/26).** This line first read "no
+> database driver is a go-boot dependency", and building `goboot/db/dbtest` proved that too strong:
+> `dbtest.Start` returns a `*sql.DB`, so it must link a driver, and `github.com/jackc/pgx/v5` is
+> therefore in go-boot's `go.mod`. `github.com/lib/pq` arrives too, as an indirect of
+> `embedded-postgres`. Neither reaches a user's binary — `go list -deps ./db` is clean of both, and
+> a test asserts it — but both are in every consumer's module graph. The claim that holds is about
+> linking, not about `go.mod`.
 
 **Health written in-house**, not taken from a library ([#7](https://github.com/squall-chua/go-boot/issues/7)).
 The whole Actuator is about 220 lines of code, plus its comments. The 130 first written here

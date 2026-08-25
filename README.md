@@ -13,9 +13,9 @@ it outright.
 
 Early. What works today is HTTP routes served by a real listener, started and stopped in Tier
 order, with a clean shutdown on SIGTERM; config from a file and the environment; the default
-middleware set with the response helpers below; and the Actuator. The rest of the v1 surface —
-gRPC, the database Starter, tracing and the Presets — is being built ticket by ticket against
-`docs/spec.md`.
+middleware set with the response helpers below; the Actuator; and the database Starter, with a
+real PostgreSQL for tests. The rest of the v1 surface — gRPC, tracing and the Presets — is being
+built ticket by ticket against `docs/spec.md`.
 
 ## Install
 
@@ -124,14 +124,108 @@ whitelist still applies there.
 `examples/http-actuator-config` is a service with the Actuator, the web Starter and its own config
 key, as a file you can run.
 
+## The database
+
+**Run the migration Job before the rollout, not beside it.** A go-boot service refuses to start
+while migrations are pending. If migrations run as a separate Kubernetes Job, that Job must finish
+before the rollout starts, or every new pod crashloops until it does. The Job runs the **same
+image** as the pods, which is what stops code and schema drifting. This is the operational
+contract, so it is said first rather than in a footnote. See
+[ADR 0007](docs/adr/0007-migrations-refuse-to-start.md).
+
+`db.migrateOnStart` applies them at startup instead. It is off by default and it is for local
+development: every pod races every other pod at rollout, and the whole run is bounded by the 30s
+`lifecycle.startTimeout`.
+
+```go
+//go:embed migrations/*.sql
+var migrations embed.FS
+
+pool, dbc, err := db.New(cfg.DB, app.Log, migrations)  // pool first: a plain *sql.DB
+app.Add(dbc, srv)
+```
+
+**go-boot links no database driver.** A driver is +7.64 MB stripped, and a MySQL user would have
+paid all of it for one they cannot use. Blank-import your own in `main`:
+
+```go
+import _ "github.com/jackc/pgx/v5/stdlib"
+```
+
+Forgetting that line is not a puzzle. `sql.Open` reports `sql: unknown driver "pgx" (forgotten
+import?)`, and `db.New` runs in `main` before `app.Run`.
+
+### Pool defaults
+
+Go's own are wrong for a service: unlimited open connections, two idle, and connections that live
+forever.
+
+| Key | Default | Why |
+|---|---|---|
+| `maxOpenConns` | 10 | a stock PostgreSQL allows about 97 connections, so **this is ten pods** before the database runs out. Scaling past ten means raising the database's limit or putting a pooler in front |
+| `maxIdleConns` | 10 | matching `maxOpenConns` avoids churn where 8 of 10 connections are closed and reopened on every burst |
+| `connMaxIdleTime` | 5m | a scaled-down deployment gives its slots back |
+| `connMaxLifetime` | 30m | connections rebalance after a failover or a proxy restart |
+
+### Transactions
+
+`db.WithTx` commits, rolls back if the closure returns an error, and rolls back and keeps panicking
+if it panics. The transaction is a **parameter**, so a reader can see it. It takes no options and it
+does not nest — `*sql.Tx` has no `Begin`, so `database/sql` cannot nest transactions at all
+([ADR 0008](docs/adr/0008-transactions-are-an-explicit-closure.md)).
+
+```go
+err := db.WithTx(ctx, pool, func(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, "INSERT INTO widget (name) VALUES ($1)", name)
+	return err
+})
+```
+
+There is no Repository interface and no Entity type, and there will not be one
+([ADR 0009](docs/adr/0009-no-repository-abstraction.md)). The pool is a plain `*sql.DB`, so `sqlc`,
+`ent`, `gorm` and hand-written SQL all take it unchanged.
+
+### Migrations, and the `migrate` subcommand
+
+There is no `goboot migrate` command and there could not be one: migrations live in your own
+`embed.FS`, which a generic go-boot binary can never see. `db.NewProvider` returns a
+`*goose.Provider`, and your `main` wires a `myservice migrate` subcommand onto it. Both that
+subcommand and `Start` call `NewProvider`, so the session lock is wired in exactly one place —
+goose leaves locking off unless you ask, and forgetting to ask is the known bug.
+
+**goose ships a session locker for PostgreSQL only.** On MySQL and SQLite there is nothing to wire,
+so two pods applying the same migration are not protected from each other. Run the migration as a
+Job, which is the documented way in any case.
+
+Passing `nil` migrations is a supported mode for a service that does not own its schema. It skips
+both the migration run and the refusal, and leaves you the pool and the readiness Check. See
+[`docs/jpa-interop.md`](docs/jpa-interop.md) for sharing one database with a Spring Data JPA
+service.
+
+### A real PostgreSQL for tests
+
+`goboot/db/dbtest` starts a real PostgreSQL 18 for one test, with **no Docker daemon**: 3 linked
+module roots against `testcontainers-go`'s 45, and up in under three seconds.
+
+```go
+func TestWidgets(t *testing.T) {
+	pool := dbtest.Start(t, migrations)   // torn down by t.Cleanup
+	dbtest.LintJPAConventions(t, pool)    // optional; see docs/jpa-interop.md
+}
+```
+
+It is safe to call from parallel tests. The first run downloads 114 MB of PostgreSQL binaries and
+caches them under your user cache directory; set `GOBOOT_PG_BINARIES` to a pre-seeded directory to
+run air-gapped. It is a separate package because it is heavy and because it links a driver, which
+`goboot/db` refuses to.
+
 ## Go version
 
-The floor is **Go 1.25.0**.
+The floor is **Go 1.25.7**.
 
-It will rise. Once the database Starter lands, go-boot depends on `goose/v3`, which declares a
-patch-level `go` directive. The highest floor in a module wins, so `go mod tidy` will write
-**`go 1.25.7`** into `go.mod`, and Go 1.25.0 through 1.25.6 will no longer build go-boot at all —
-even for a user who never imports the database Starter.
+It rose from 1.25.0 when the database Starter landed: go-boot now depends on `goose/v3`, which
+declares a patch-level `go` directive, and the highest floor in a module wins. Go 1.25.0 through
+1.25.6 no longer build go-boot at all — even for a user who never imports the database Starter.
 
 A stock Go 1.22 toolchain handles this on its own: it downloads the newer toolchain in about
 fifteen seconds. But that needs the toolchain switch and the module proxy to be working, so
