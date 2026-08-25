@@ -56,7 +56,10 @@ mods() {
 	local pkg=$1 all
 	shift
 	all=$(go list -deps "$@" -f '{{if .Module}}{{.Module.Path}}{{end}}' "$pkg")
-	printf '%s\n' "$all" | sort -u | grep -vxF "$M" || true
+	# No trailing newline: a package that links nothing but stdlib leaves
+	# $all empty, and `printf '%s\n'` would turn that into one blank line,
+	# which counts as a module. sort supplies the newline for a real list.
+	printf '%s' "$all" | sort -u | grep -vxF "$M" || true
 }
 
 # 1. The base package and its TESTS import no Starter. This is #3's hard
