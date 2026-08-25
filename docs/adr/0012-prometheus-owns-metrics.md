@@ -87,8 +87,10 @@ a single counter. The rule is `docs/spec.md` §4.2; the package it produced is `
   the call, not in a `defer`. Counting it would have made this the one place in go-boot that calls
   a dropped connection a server error.
 - **HTTP metrics are not in this change, and now have nothing left to decide.** `/actuator/metrics`
-  still carries no count or latency by route. When that work starts, the pipeline question is
-  already answered and the shape is already on disk to copy.
+  still carries no count or latency by route. That is
+  [#45](https://github.com/squall-chua/go-boot/issues/45): the pipeline question is already
+  answered and `goboot/grpc/metrics` is the shape to copy, so what is left is where the middleware
+  goes and keeping the route label bounded.
 - **A future Starter has no decision to make.** If it emits a metric, the metric goes on the
   Prometheus default registry, and if it needs a dependency to do so, it goes in a subpackage the
   user imports. That is the point of writing it down once.

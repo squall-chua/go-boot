@@ -642,6 +642,11 @@ OTel pipeline, visible only to whoever runs a collector. The other route to one 
 metric SDK and its exporter as modules, and it makes RPC metrics conditional on tracing being
 imported *and* enabled, so a service that wants a counter and no collector cannot have one.
 
+**HTTP metrics are still missing, and now have nothing left to decide.** `/actuator/metrics`
+carries no count and no latency by route. That is
+[#45](https://github.com/squall-chua/go-boot/issues/45), and the rule above is what it spends: the
+pipeline question is answered, so the work is typing.
+
 **No metric go-boot ships is registered from a package a user links by default.** `goboot/actuator`
 serves the registry, it does not fill it. Anything that registers is an opt-in subpackage, which is
 what keeps [9](#9-known-gaps-in-v1)'s "every Actuator user links Prometheus" from growing a second
