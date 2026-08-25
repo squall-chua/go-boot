@@ -1,6 +1,6 @@
 // Package dbtest brings up a real PostgreSQL for a test, with no Docker
 // daemon. It is a separate package because it is heavy — the binaries are
-// 114 MB on disk and the first run needs network — and because it links a
+// about 71 MB on disk and the first run needs network — and because it links a
 // driver, which goboot/db deliberately does not.
 //
 // Embedded PostgreSQL rather than testcontainers-go: 3 linked module roots
@@ -52,7 +52,7 @@ func Start(tb testing.TB, migrations fs.FS) *sql.DB {
 	dir := tb.TempDir()
 	cfg := embeddedpostgres.DefaultConfig().
 		Port(freePort(tb)).
-		// Shared, because this is the 114 MB the first run downloads. It is
+		// Shared, because this is the 71 MB the first run downloads. It is
 		// the one path that must NOT be per-test.
 		BinariesPath(binariesPath(tb)).
 		// Isolated. Sharing the runtime path fails on the password file even
@@ -137,7 +137,7 @@ func binariesPath(tb testing.TB) string {
 // Hibernate never puts one there.
 func LintJPAConventions(tb testing.TB, pool *sql.DB) {
 	tb.Helper()
-	findings, err := lintJPAConventions(context.Background(), pool)
+	findings, err := lintJPAConventions(context.Background(), pool, skippedTables)
 	if err != nil {
 		tb.Fatalf("dbtest: lint: %v", err)
 	}
@@ -146,14 +146,25 @@ func LintJPAConventions(tb testing.TB, pool *sql.DB) {
 	}
 }
 
+// skippedTables are the migration tools' own bookkeeping tables. Skipping
+// them is load-bearing rather than tidy: goose_db_version has a `tstamp
+// timestamp` column and no `version` column, so without the skip this lint
+// fails every schema go-boot itself creates. A test proves that.
+var skippedTables = []string{
+	"goose_db_version",                           // goose
+	"flyway_schema_history",                      // Flyway
+	"databasechangelog", "databasechangeloglock", // Liquibase
+}
+
 // lintJPAConventions is the lint itself, split out from the reporting so it
-// can be tested against a schema that is deliberately wrong.
-func lintJPAConventions(ctx context.Context, pool *sql.DB) ([]string, error) {
-	// The migration tools' own bookkeeping tables are skipped, and that is
-	// load-bearing rather than tidy: goose_db_version has a `tstamp
-	// timestamp` column and no `version` column, so without the skip this
-	// lint fails every schema go-boot itself creates.
-	const skip = `('goose_db_version', 'flyway_schema_history', 'databasechangelog', 'databasechangeloglock')`
+// can be tested against a schema that is deliberately wrong, and so a test
+// can run it with nothing skipped.
+func lintJPAConventions(ctx context.Context, pool *sql.DB, skipped []string) ([]string, error) {
+	if skipped == nil {
+		// `<> ALL(NULL)` is NULL, which would drop every row. An empty array
+		// is the "skip nothing" the caller meant.
+		skipped = []string{}
+	}
 
 	checks := []struct {
 		what  string
@@ -162,20 +173,20 @@ func lintJPAConventions(ctx context.Context, pool *sql.DB) ([]string, error) {
 		{"identifier is not lower_snake_case", `
 			SELECT table_name || '.' || column_name
 			FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name NOT IN ` + skip + `
+			WHERE table_schema = 'public' AND table_name <> ALL($1)
 			  AND (table_name !~ '^[a-z_][a-z0-9_]*$' OR column_name !~ '^[a-z_][a-z0-9_]*$')
 			ORDER BY 1`},
 		{"timestamp column has no time zone", `
 			SELECT table_name || '.' || column_name
 			FROM information_schema.columns
-			WHERE table_schema = 'public' AND table_name NOT IN ` + skip + `
+			WHERE table_schema = 'public' AND table_name <> ALL($1)
 			  AND data_type = 'timestamp without time zone'
 			ORDER BY 1`},
 		{"table has no version column, so JPA optimistic locking cannot work", `
 			SELECT t.table_name
 			FROM information_schema.tables t
 			WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
-			  AND t.table_name NOT IN ` + skip + `
+			  AND t.table_name <> ALL($1)
 			  AND NOT EXISTS (
 				SELECT 1 FROM information_schema.columns c
 				WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name
@@ -185,7 +196,7 @@ func lintJPAConventions(ctx context.Context, pool *sql.DB) ([]string, error) {
 
 	var findings []string
 	for _, check := range checks {
-		found, err := queryStrings(ctx, pool, check.query)
+		found, err := queryStrings(ctx, pool, check.query, skipped)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", check.what, err)
 		}
@@ -196,8 +207,8 @@ func lintJPAConventions(ctx context.Context, pool *sql.DB) ([]string, error) {
 	return findings, nil
 }
 
-func queryStrings(ctx context.Context, pool *sql.DB, query string) ([]string, error) {
-	rows, err := pool.QueryContext(ctx, query)
+func queryStrings(ctx context.Context, pool *sql.DB, query string, skipped []string) ([]string, error) {
+	rows, err := pool.QueryContext(ctx, query, skipped)
 	if err != nil {
 		return nil, err
 	}

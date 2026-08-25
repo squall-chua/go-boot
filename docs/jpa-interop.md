@@ -4,7 +4,9 @@ A go-boot service and a Spring Data JPA service can read and write the same data
 page is the convention that makes it work.
 
 Everything here was measured against Hibernate 6.6.11 and PostgreSQL 18.3, with a Go writer
-on the same tables. The evidence is in [`docs/research/jpa-interop.md`](research/jpa-interop.md).
+on the same tables. The one exception is the lint's test fixture, which is Hibernate 7.4.1 and says
+so where it is used. The evidence is in
+[`docs/research/jpa-interop.md`](research/jpa-interop.md).
 
 ## The one rule that loses data
 
@@ -91,6 +93,18 @@ It reads `information_schema` and reports three things:
 - a table with no `version` column
 
 It skips the bookkeeping tables of goose, Flyway and Liquibase.
+
+That skip is load-bearing, not tidy. `goose_db_version` has a `tstamp timestamp` column and no
+`version` column, so without it the lint fails every schema go-boot creates — there is a test that
+removes the skip and shows exactly that.
+
+The lint's own tests run it against a schema **Hibernate generated** — Hibernate 7.4.1, from two
+entities that follow this page — and it reports nothing. Hand-roll the same two tables without
+reading the page and it reports all three findings.
+
+A schema Hibernate wrote is not clean by itself. It is clean because the *entities* followed this
+page. Default entities give you `LocalDateTime`, and the table above says to avoid it for the
+reason the lint flags it: the offset is lost.
 
 **It checks this convention. It does not check your JPA model, and it cannot.** go-boot never
 sees your Java classes. Only `ddl-auto=validate` can confirm that a schema matches a particular

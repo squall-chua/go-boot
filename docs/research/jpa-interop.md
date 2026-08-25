@@ -193,3 +193,25 @@ service with `ddl-auto=validate` — and know from §6 that this leaves types un
 Everything above was run from a scratch directory: 16 Hibernate jars pulled from Maven Central, the
 PostgreSQL 18.3 binaries that `fergusstrange/embedded-postgres` caches, and a small Go writer. No
 part of it touched this repository, and nothing was added to any `go.mod` here.
+
+---
+
+## Addendum: the lint's test fixture (2026-08-25, [#27](https://github.com/squall-chua/go-boot/issues/27))
+
+`LintJPAConventions` has to be tested against a schema Hibernate itself generated, so one was
+generated. **Hibernate ORM 7.4.1.Final**, OpenJDK 25.0.3, jars already on disk, no network. This is
+a **newer Hibernate than the 6.6.11 used above**, because 6.6.11 was no longer on this machine.
+
+The entities follow this page — `@Version` on both, `IDENTITY` ids, `Instant` rather than
+`LocalDateTime`, `@Enumerated(EnumType.STRING)` — with
+`hibernate.physical_naming_strategy=CamelCaseToUnderscoresNamingStrategy` (the Spring Boot default)
+and `jakarta.persistence.schema-generation.scripts.action=create`. The output is checked in verbatim
+at `db/dbtest/testdata/hibernate_schema.sql`, and the lint reports nothing against it.
+
+**One difference from §1's 6.6.11 output**, and it is the only one: 7.4.1 writes
+`version bigint not null`, where 6.6.11 wrote `version bigint`. Nothing the lint or this page
+depends on.
+
+A schema Hibernate generated is **not** automatically clean. §1's own `customer`, from the default
+entity set, has `updated_at timestamp(6)` from a `LocalDateTime` — which is exactly what the lint
+flags. Clean means the entities followed this page, not that Hibernate wrote the DDL.
