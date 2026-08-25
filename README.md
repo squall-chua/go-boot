@@ -11,9 +11,11 @@ it outright.
 
 ## Status
 
-Early. What works today is one HTTP route served by a real listener, started and stopped in Tier
-order, with a clean shutdown on SIGTERM. The rest of the v1 surface is being built ticket by
-ticket against `docs/spec.md`.
+Early. What works today is HTTP routes served by a real listener, started and stopped in Tier
+order, with a clean shutdown on SIGTERM; config from a file and the environment; and the default
+middleware set with the response helpers below. The rest of the v1 surface — the Actuator, gRPC,
+the database Starter, tracing and the Presets — is being built ticket by ticket against
+`docs/spec.md`.
 
 ## Install
 
@@ -42,8 +44,9 @@ func main() {
 	}
 
 	srv := web.New(web.Config{Addr: ":8080"}, app.Log)
+	srv.Use(web.DefaultMiddleware(app.Log)...)
 	srv.HandleFunc("GET /hello", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("hello"))
+		web.WriteJSON(w, http.StatusOK, map[string]string{"hello": "world"})
 	})
 	app.Add(srv)
 
@@ -53,9 +56,36 @@ func main() {
 }
 ```
 
+`examples/http-only` is this same service as a file you can run.
+
 `app.Add` ignores the order you write. Each Component declares its own Tier, and go-boot starts
 from the lowest Tier to the highest and stops in reverse. So wiring in the wrong order is not a
 mistake you can make.
+
+## The default middleware
+
+`web.DefaultMiddleware` is a slice you can print and edit, not hidden behaviour. It holds three
+entries, outermost first:
+
+1. `RequestID` — puts an `X-Request-Id` on the response. It reuses the one the caller sent only if
+   it is at most 64 characters of letters, digits, `-`, `_` and `.`; anything else is replaced.
+   An unbounded attacker-controlled string flowing into every log line is a log-injection hole.
+2. `Logging` — one line per request on the way out, carrying method, path, route, status, bytes,
+   duration and request ID. A 5xx goes to ERROR, everything else to INFO, so a server error is
+   findable by level alone. It also attaches the request-scoped logger, so
+   `goboot.LoggerFrom(r.Context())` inside a handler returns a logger already tagged with the
+   request ID.
+3. `Recovery` — turns a panicking handler into a 500 as an RFC 7807 document. Without it, a panic
+   gives the client `EOF` and no response at all. It sits **inside** `Logging` on purpose, so the
+   500 it writes passes back out through the logging wrapper and is recorded as a 500.
+
+**Probe traffic is not logged.** `/livez`, `/readyz` and `/actuator/*` are skipped. Kubernetes hits
+the first two every ten seconds, which is roughly 17,000 log lines a day saying nothing. These three
+paths are hardcoded, not a config key.
+
+Errors on the wire are RFC 7807 documents from `web.WriteProblem`, so a panic and a hand-written
+400 come out in the same shape. `web.DecodeJSON` reads a request body with the size cap, unknown
+field rejection and readable errors that `json.NewDecoder(r.Body).Decode` leaves to you.
 
 ## Go version
 

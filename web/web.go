@@ -15,10 +15,21 @@ import (
 )
 
 // Config is the web section. Every field has a working default.
+//
+// There is no writeTimeout: it stays off because gRPC streams share this
+// server (ADR 0006), and a write deadline would cut a long stream in half.
 type Config struct {
 	Addr              string        `yaml:"addr"`              // ":8080"
 	ReadHeaderTimeout time.Duration `yaml:"readHeaderTimeout"` // 5s
 	IdleTimeout       time.Duration `yaml:"idleTimeout"`       // 120s
+	MaxBodyBytes      int64         `yaml:"maxBodyBytes"`      // 1 MiB; the cap DecodeJSON applies
+	// TLS is two keys and nothing else. There is no autocert: a service
+	// behind an ingress does not need one, and one in front of the internet
+	// needs a story about storage and renewal that go-boot does not have.
+	TLS struct {
+		CertFile string `yaml:"certFile"`
+		KeyFile  string `yaml:"keyFile"`
+	} `yaml:"tls"`
 }
 
 // Middleware wraps a handler. It is the plain net/http shape, so anything
@@ -33,6 +44,9 @@ type Server struct {
 	mw   []Middleware
 	ln   net.Listener
 	errc chan error
+
+	maxBody int64
+	tls     struct{ certFile, keyFile string }
 }
 
 // New builds the Server. It cannot fail, so it returns no error: the listener
@@ -48,11 +62,14 @@ func New(cfg Config, log *slog.Logger) *Server {
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = 120 * time.Second
 	}
+	if cfg.MaxBodyBytes == 0 {
+		cfg.MaxBodyBytes = defaultMaxBodyBytes
+	}
 	if log == nil {
 		log = slog.Default()
 	}
 	mux := http.NewServeMux()
-	return &Server{
+	s := &Server{
 		log: log,
 		mux: mux,
 		srv: &http.Server{
@@ -62,8 +79,11 @@ func New(cfg Config, log *slog.Logger) *Server {
 			IdleTimeout:       cfg.IdleTimeout,
 			// WriteTimeout stays off: gRPC streams share this server.
 		},
-		errc: make(chan error, 1),
+		errc:    make(chan error, 1),
+		maxBody: cfg.MaxBodyBytes,
 	}
+	s.tls.certFile, s.tls.keyFile = cfg.TLS.CertFile, cfg.TLS.KeyFile
+	return s
 }
 
 // Handle mounts a handler. It takes the two-value return of a connect-go
@@ -95,13 +115,23 @@ func (s *Server) Tier() goboot.Tier { return goboot.TierTransport }
 // Start opens the listener and serves in the background. It returns once the
 // port is bound, so a caller can read Addr straight after.
 func (s *Server) Start(ctx context.Context) (<-chan error, error) {
+	// One key without the other is a half-finished config, most likely a
+	// misspelt path. Checked here, before the listener opens, so it comes
+	// back from Start rather than arriving on errc a moment later.
+	if (s.tls.certFile == "") != (s.tls.keyFile == "") {
+		return nil, errors.New("web: tls needs both certFile and keyFile, or neither")
+	}
 	// Wrap the mux itself, never s.srv.Handler, so a second Start does not
 	// wrap the middleware round a second time.
 	var h http.Handler = s.mux
 	for i := len(s.mw) - 1; i >= 0; i-- { // first listed ends up outermost
 		h = s.mw[i](h)
 	}
-	s.srv.Handler = h
+	// Outermost of all, so DecodeJSON sees the configured cap whatever the
+	// developer did to the middleware slice.
+	s.srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(withMaxBody(r.Context(), s.maxBody)))
+	})
 
 	ln, err := net.Listen("tcp", s.srv.Addr)
 	if err != nil {
@@ -109,7 +139,7 @@ func (s *Server) Start(ctx context.Context) (<-chan error, error) {
 	}
 	s.ln = ln
 	go func() {
-		err := s.srv.Serve(ln)
+		err := s.serve(ln)
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
 		}
@@ -117,6 +147,15 @@ func (s *Server) Start(ctx context.Context) (<-chan error, error) {
 	}()
 	s.log.Info("listening", "component", s.Name(), "addr", ln.Addr().String())
 	return s.errc, nil
+}
+
+// serve picks the plain or the TLS listener. Start has already rejected one
+// key without the other, so testing either is enough.
+func (s *Server) serve(ln net.Listener) error {
+	if s.tls.certFile != "" {
+		return s.srv.ServeTLS(ln, s.tls.certFile, s.tls.keyFile)
+	}
+	return s.srv.Serve(ln)
 }
 
 // Stop refuses new connections and waits for the open ones, up to the
