@@ -1026,7 +1026,7 @@ func run(ctx context.Context) error {
 	act.MountOn(srv)
 	app.Add(act, srv)
 
-	srv.Handle("GET /hello/{name}", greet(cfg.Greeting, app.Log))
+	srv.Handle("GET /hello/{name}", greet(cfg.Greeting))
 
 	return app.Run(ctx)
 }
@@ -1147,7 +1147,7 @@ pinning.
 | `github.com/go-viper/mapstructure/v2` | v2.5.0 | base (config) | [#9](https://github.com/squall-chua/go-boot/issues/9) | relaxed key matching and type-directed comma lists need reflection the hand loader would have to write. **Zero transitive dependencies**: 1 `go.sum` module, 1 linked module |
 | `github.com/prometheus/client_golang` | v1.24.1 | actuator | [#7](https://github.com/squall-chua/go-boot/issues/7) | `promhttp.Handler()` over the default registry. Two pipelines, not one: Prometheus for metrics, OTel for traces |
 | `connectrpc.com/connect` | v1.20.0 | grpc | [#5](https://github.com/squall-chua/go-boot/issues/5) | proven by experiment: a real `grpc-go` client reached it over cleartext with no proxy, and one port served Connect JSON and gRPC-Web too. CNCF sandbox. grpc-gateway's in-process mode is unary-only and kills interceptors; Vanguard is still alpha after three years |
-| `google.golang.org/protobuf` | v1.36.12 | grpc (indirect) | [#5](https://github.com/squall-chua/go-boot/issues/5) | comes with connect. gRPC costs exactly these two modules and +3.57 MB |
+| `google.golang.org/protobuf` | v1.36.11 | grpc (indirect), actuator (indirect) | [#5](https://github.com/squall-chua/go-boot/issues/5) | comes with connect. gRPC costs exactly these two modules and +3.57 MB |
 | `github.com/pressly/goose/v3` | v3.27.3 | db | [#6](https://github.com/squall-chua/go-boot/issues/6) | driven through `NewProvider` in-process. ⚠️ **goose does not lock unless told to** — `lock.NewPostgresSessionLocker()` is wired on by default. Atlas ruled out twice (its library never locks, and the real revision store is behind a paid binary); golang-migrate blocks uncancellably and carries the dirty flag |
 | `go.opentelemetry.io/otel` and its SDK | v1.45.0 | trace | [#7](https://github.com/squall-chua/go-boot/issues/7), [#10](https://github.com/squall-chua/go-boot/issues/10) | traces only. **+9.4 MB stripped and 19 indirect modules**, which is why it is a separate Starter |
 | `.../contrib/instrumentation/net/http/otelhttp` | v0.70.0 | trace | [#7](https://github.com/squall-chua/go-boot/issues/7) | HTTP spans, span name from `r.Pattern` |
@@ -1158,8 +1158,10 @@ pinning.
 is +7.64 MB.
 
 **Health written in-house**, not taken from a library ([#7](https://github.com/squall-chua/go-boot/issues/7)).
-The whole Actuator is about 130 lines. There is no capability gap in the Go ecosystem here; the gap
-is assembly and correct defaults.
+The whole Actuator is about 220 lines of code, plus its comments. The 130 first written here
+described the prototype stub, which had no whitelist check, no pprof, no `showDetails` and no
+timeout on its private listener ([#25](https://github.com/squall-chua/go-boot/issues/25)). There is
+no capability gap in the Go ecosystem here; the gap is assembly and correct defaults.
 
 ---
 
@@ -1226,6 +1228,14 @@ Written down as gaps, not left out.
   must not discover it at scale.
 - **Two Apps in one process share one Prometheus registry.** go-boot is one service per process, so
   nobody pays it.
+- **Every Actuator user links Prometheus, even with metrics at 404.** Measured in
+  [#25](https://github.com/squall-chua/go-boot/issues/25) against the `http-only` example: 6.49 MB
+  and 2 linked modules become 11.09 MB and 11. `CONTEXT.md` says a Starter splits a dependency only
+  some of its users need, and this one qualifies, because `metrics` is off by default. It is not
+  split anyway: a `goboot/actuator/metrics` subpackage could not register its route through the
+  whitelist, so `main` would need a second mount line, and `act.MountOn(srv)` being one line that is
+  correct in both port modes is the Actuator's best property. Half the weight ADR `0010` split
+  `traced.Full` out for, for an API cost ADR `0003` was written to avoid.
 
 ---
 
