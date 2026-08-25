@@ -136,10 +136,12 @@ func TestStarterLinksNoDriver(t *testing.T) {
 
 // TestPoolIsNeutralAboutTheQueryLayer states ADR 0009 as a compile-time
 // check. DBTX is sqlc's generated interface, copied verbatim — sqlc writes it
-// into the user's own repository, so there is nothing to import. ent and gorm
-// take a plain *sql.DB the same way; they are not linked here because
-// docs/spec.md 7 fixes the dependency list and neither is on it. The
-// compile-against-all-three evidence is in docs/adr/0009.
+// into the user's own repository, so there is nothing to import.
+//
+// ent and gorm take a plain *sql.DB the same way, and that is checked by
+// compiling too — in .github/check-query-layer-neutrality.sh, which builds
+// them in a throwaway module. They are not linked here because docs/spec.md 7
+// fixes go-boot's dependency list and neither is on it.
 type DBTX interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	PrepareContext(context.Context, string) (*sql.Stmt, error)

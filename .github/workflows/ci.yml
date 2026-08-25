@@ -46,5 +46,23 @@ jobs:
       - name: vet
         run: go vet ./...
 
+      - name: the pool is neutral about the query layer
+        # ADR 0009, checked by compiling. ent and gorm are built in a
+        # throwaway module, because docs/spec.md 7 fixes go-boot's dependency
+        # list and neither is on it.
+        run: .github/check-query-layer-neutrality.sh
+
+      - name: cache the PostgreSQL test binaries
+        # goboot/db/dbtest starts a real PostgreSQL. Measured on linux/amd64:
+        # a 14 MB download and 71 MB on disk. Without this it is pulled from
+        # Maven Central on every run, which puts a third-party host in the
+        # path of the whole test job.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.embedded-postgres-go
+            ~/.cache/go-boot/embedded-postgres
+          key: embedded-postgres-${{ runner.os }}-18.3.0
+
       - name: test
         run: go test ./...

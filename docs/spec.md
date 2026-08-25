@@ -733,6 +733,12 @@ opposite looks obviously right until you notice the direction.
 
 #### Migrations
 
+> **Amended by [#26](https://github.com/squall-chua/go-boot/issues/26).** `NewProvider` is the only
+> place the session lock is wired, but goose ships a session locker for **PostgreSQL only** —
+> `lock/postgres.go` is the whole package. On `mysql` and `sqlite3` there is nothing to wire, so two
+> pods applying the same migration are not protected from each other. The dialect switch still
+> accepts them; the lock does not follow. Said out loud in the database Starter's documentation.
+
 **There is no `goboot migrate` command, and there could not have been.** Migrations live in the
 user's own `embed.FS`, so a generic go-boot binary can never see them. `goboot/db` exports
 `NewProvider`, and the Scaffold writes a `migrate` subcommand into the user's `main`. **The command
@@ -781,9 +787,18 @@ parallel-unsafe in two measured ways — two instances collide on `initdb`, and 
 isolate `RuntimePath` and `DataPath`, take a free port from `net.Listen(":0")`. Four parallel
 instances, all green, 3.1s.
 
-Costs to document: a first run needs network and puts 114 MB on disk; `BinariesPath` lets an
-air-gapped CI pre-seed. Importing `testing` from a non-test package costs nothing — measured, zero
-flags registered, since Go 1.13 moved them into `testing.Init()`.
+Costs to document: a first run needs network and puts about **71 MB** on disk; `BinariesPath` lets
+an air-gapped CI pre-seed, and `dbtest` reads the environment variable **`GOBOOT_PG_BINARIES`** to
+point it there. Importing `testing` from a non-test package costs nothing — measured, zero flags
+registered, since Go 1.13 moved them into `testing.Init()`.
+
+> **Amended by [#26](https://github.com/squall-chua/go-boot/issues/26).** This line first said
+> **114 MB**. Re-measured from a cold cache on linux/amd64 with PostgreSQL 18.3: the download is a
+> **14.3 MB** `.txz`, and it extracts to **56.4 MB**, so **70.7 MB** in total across the two paths.
+> The 114 MB figure is not reproducible here. It may hold on another platform, so re-measure before
+> quoting it again. The same amendment names `GOBOOT_PG_BINARIES`, which the spec asked for in
+> effect — "`BinariesPath` lets an air-gapped CI pre-seed" — without naming a mechanism a user
+> could reach.
 
 `LintJPAConventions` is from [#18](https://github.com/squall-chua/go-boot/issues/18). It checks
 three things over `information_schema`: identifiers that are not `lower_snake_case`, `timestamp

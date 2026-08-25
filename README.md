@@ -214,9 +214,9 @@ func TestWidgets(t *testing.T) {
 }
 ```
 
-It is safe to call from parallel tests. The first run downloads 114 MB of PostgreSQL binaries and
-caches them under your user cache directory; set `GOBOOT_PG_BINARIES` to a pre-seeded directory to
-run air-gapped. It is a separate package because it is heavy and because it links a driver, which
+It is safe to call from parallel tests. The first run downloads about 14 MB of PostgreSQL binaries
+and extracts them to roughly 71 MB under your user cache directory — measured on linux/amd64 with
+PostgreSQL 18.3. Set `GOBOOT_PG_BINARIES` to a pre-seeded directory to run air-gapped. It is a separate package because it is heavy and because it links a driver, which
 `goboot/db` refuses to.
 
 ## Go version
