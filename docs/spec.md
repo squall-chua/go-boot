@@ -1175,7 +1175,7 @@ func runExplicit(ctx context.Context) error {
 	}
 	act := actuator.New(cfg.Actuator, app)
 	srv := web.New(cfg.Web, app.Log)
-	srv.Use(trace.DefaultMiddleware(app.Log)...) // RequestID, trace, Logging, Recovery
+	srv.Use(trace.DefaultMiddleware(app.Log)...) // five entries; see 4.6
 	act.MountOn(srv)
 	app.Add(act, tracer, database, srv)
 
@@ -1326,6 +1326,12 @@ Written down as gaps, not left out.
   must not discover it at scale.
 - **Two Apps in one process share one Prometheus registry.** go-boot is one service per process, so
   nobody pays it.
+- **And they share one tracer provider, for the same reason.** `trace.Component.Start` calls
+  `otel.SetTracerProvider` and `otel.SetTextMapPropagator`, which are process-wide slots, so a
+  second App's `Start` replaces the first App's exporter rather than adding to it. Identical in
+  shape to the registry above and it costs nobody anything for the same reason, but it is the
+  answer to "can I run two go-boot Apps side by side", and that answer is no.
+  ([#30](https://github.com/squall-chua/go-boot/issues/30))
 - **Every Actuator user links Prometheus, even with metrics at 404.** Measured in
   [#25](https://github.com/squall-chua/go-boot/issues/25) against the `http-only` example: 6.49 MB
   and 2 linked modules become 11.09 MB and 11. `CONTEXT.md` says a Starter splits a dependency only

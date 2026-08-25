@@ -57,24 +57,35 @@ func (g *grpcGreeter) GreetStream(context.Context, *connect.Request[greetv1.Gree
 
 // TestAnRPCGetsOneSpanNotTwo is the whole reason trace.IsRPC exists. otelhttp
 // and otelconnect mounted together give a redundant HTTP parent wrapping the
-// real RPC span, and the second subtest measures that rather than asserting
-// it: it mounts otelhttp with the filter removed and counts two.
+// real RPC span, and the last subtest measures that rather than asserting it:
+// it mounts otelhttp with the filter removed and counts two.
+//
+// Three of connect's four protocols run here end to end, one per header rule
+// trace.IsRPC applies: gRPC and gRPC-Web through the content type, Connect
+// through the protocol header. Connect JSON shares Connect proto's header and
+// is covered by the unit table in goboot/trace.
 func TestAnRPCGetsOneSpanNotTwo(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		filter  bool
 		want    int
+		h2c     bool // the gRPC protocol needs HTTP/2; the other two run on HTTP/1
 		options []connect.ClientOption
 	}{
-		{"connect protocol", true, 1, nil},
-		{"grpc-web protocol", true, 1, []connect.ClientOption{connect.WithGRPCWeb()}},
-		{"otelhttp unfiltered is the bug this filter fixes", false, 2, nil},
+		{"grpc protocol", true, 1, true, []connect.ClientOption{connect.WithGRPC()}},
+		{"grpc-web protocol", true, 1, false, []connect.ClientOption{connect.WithGRPCWeb()}},
+		{"connect protocol", true, 1, false, nil},
+		{"otelhttp unfiltered is the bug this filter fixes", false, 2, false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spans.Reset()
 			base := serve(t, tc.filter)
 
-			client := greetv1connect.NewGreetServiceClient(http.DefaultClient, base, tc.options...)
+			httpClient := http.DefaultClient
+			if tc.h2c {
+				httpClient = h2cClient()
+			}
+			client := greetv1connect.NewGreetServiceClient(httpClient, base, tc.options...)
 			resp, err := client.Greet(t.Context(), connect.NewRequest(&greetv1.GreetRequest{Name: "bob"}))
 			if err != nil {
 				t.Fatalf("Greet: %v", err)
@@ -97,6 +108,15 @@ func TestAnRPCGetsOneSpanNotTwo(t *testing.T) {
 			}
 		})
 	}
+}
+
+// h2cClient speaks HTTP/2 over cleartext, which is what the gRPC protocol
+// needs. Since Go 1.24 net/http does this itself, so there is no
+// golang.org/x/net/http2 here and no extra module in go.sum.
+func h2cClient() *http.Client {
+	t := &http.Transport{Protocols: &http.Protocols{}}
+	t.Protocols.SetUnencryptedHTTP2(true)
+	return &http.Client{Transport: t}
 }
 
 // serve mounts the greet service behind the tracing middleware. filter=false
