@@ -1,0 +1,8 @@
+goboot 1
+goboot/web 1
+goboot/actuator 10
+goboot/db 6
+goboot/grpc 2
+goboot/trace 1
+goboot/preset 15
+goboot/preset/traced 15

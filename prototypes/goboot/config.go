@@ -12,13 +12,21 @@ import (
 	yaml "go.yaml.in/yaml/v3"
 )
 
-// Load fills out from <path> then from PREFIX_-scoped env vars.
+// Load fills out from the embedded defaults, then <path> on disk, then
+// PREFIX_-scoped env vars. Outside beats inside; env beats everything (#9).
 //
 // STUB of the 78-line loader in docs/research/config-library.md: no profile
 // overlay, no flag layer. Precedence here is struct defaults < file < env.
 // Env nesting separator is "__" (GB_HTTP__ADDR -> http.addr), and yaml keys
 // must be lowercase for the env layer to bind.
-func Load(path, prefix string, out any) error {
+func Load(defaults fs.FS, path, prefix string, out any) error {
+	if defaults != nil {
+		if b, err := fs.ReadFile(defaults, path); err == nil {
+			if err := decode(b, out); err != nil {
+				return fmt.Errorf("config (embedded) %s: %w", path, err)
+			}
+		}
+	}
 	b, err := os.ReadFile(path)
 	switch {
 	case err == nil:

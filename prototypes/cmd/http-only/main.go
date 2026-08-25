@@ -1,30 +1,37 @@
-// Command http-only is the smallest useful go-boot service: PRESET FORM.
-// Run the explicit form this Preset expands to with: ./http-only explicit
+// Command http-only is the smallest useful go-boot service. There is no
+// Preset form: #2 Q21 deleted preset.HTTP because it came out LONGER than
+// this body. The short path is short because the library is small.
 package main
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"os"
 
-	"goboot-prototype/goboot/preset"
+	"goboot-prototype/goboot"
+	"goboot-prototype/goboot/web"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "explicit" {
-		mainExplicit()
-		return
-	}
-
-	app, err := preset.HTTP(":8080")
-	if err != nil {
-		panic(err)
-	}
-	app.HTTP.Handle("GET /hello/{name}", http.HandlerFunc(hello))
-	if err := app.Run(context.Background()); err != nil {
-		app.Log.Error("exit", "err", err)
+	if err := run(context.Background()); err != nil {
+		slog.Error("exit", "err", err)
 		os.Exit(1)
 	}
+}
+
+func run(ctx context.Context) error {
+	app, err := goboot.New(goboot.LogConfig{})
+	if err != nil {
+		return err
+	}
+	srv := web.New(web.Config{Addr: ":8080"}, app.Log)
+	srv.Use(web.DefaultMiddleware(app.Log)...)
+	app.Add(srv)
+
+	srv.Handle("GET /hello/{name}", http.HandlerFunc(hello))
+
+	return app.Run(ctx)
 }
 
 // hello stands in for the Service Layer.

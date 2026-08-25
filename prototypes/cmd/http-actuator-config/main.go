@@ -1,39 +1,63 @@
-// Command http-actuator-config is the realistic default: PRESET FORM.
-// Run the explicit form this Preset expands to with: ./http-actuator-config explicit
+// Command http-actuator-config is the realistic default: one Transport, an
+// Actuator and the service's own config key. No Preset form — #2 Q21 deleted
+// preset.WebWith.
 package main
 
 import (
 	"context"
+	"embed"
+	"log/slog"
+	"net/http"
 	"os"
 
 	"goboot-prototype/goboot"
-	"goboot-prototype/goboot/preset"
+	"goboot-prototype/goboot/actuator"
+	"goboot-prototype/goboot/web"
 )
 
-// config is the service's own config struct: go-boot's keys inline, plus its own.
+//go:embed app.yaml
+var defaultsFS embed.FS
+
+// config is the service's own config struct: go-boot's keys, plus its own.
 type config struct {
-	preset.Config `yaml:",inline"`
-	Greeting      string `yaml:"greeting"`
+	Log      goboot.LogConfig `yaml:"log"`
+	Web      web.Config       `yaml:"web"`
+	Actuator actuator.Config  `yaml:"actuator"`
+	Greeting string           `yaml:"greeting"`
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "explicit" {
-		mainExplicit()
-		return
-	}
-
-	cfg := config{Greeting: "hello"} // struct pre-fill IS the defaults layer
-	if err := goboot.Load("app.yaml", "GB_", &cfg); err != nil {
-		panic(err)
-	}
-	app, err := preset.WebWith(cfg.Config)
-	if err != nil {
-		panic(err)
-	}
-	app.HTTP.Handle("GET /hello/{name}", greet(cfg.Greeting, app.Log))
-	app.Actuator.Ready("self", func(context.Context) error { return nil })
-	if err := app.Run(context.Background()); err != nil {
-		app.Log.Error("exit", "err", err)
+	if err := run(context.Background()); err != nil {
+		slog.Error("exit", "err", err)
 		os.Exit(1)
 	}
+}
+
+func run(ctx context.Context) error {
+	cfg := config{Greeting: "hello"} // struct pre-fill IS the defaults layer
+	if err := goboot.Load(defaultsFS, "app.yaml", "GB_", &cfg); err != nil {
+		return err
+	}
+	app, err := goboot.New(cfg.Log)
+	if err != nil {
+		return err
+	}
+	act := actuator.New(cfg.Actuator, app)
+	srv := web.New(cfg.Web, app.Log)
+	srv.Use(web.DefaultMiddleware(app.Log)...)
+	act.MountOn(srv)
+	app.Add(act, srv)
+
+	srv.Handle("GET /hello/{name}", greet(cfg.Greeting, app.Log))
+
+	return app.Run(ctx)
+}
+
+// greet stands in for the Service Layer.
+func greet(greeting string, log *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		log.Debug("greeting", "name", name) // visible after PUT /loglevel
+		w.Write([]byte(greeting + " " + name + "\n"))
+	})
 }

@@ -1,38 +1,51 @@
-// Package grpc is a THROWAWAY stub of the go-boot gRPC Transport Starter,
-// built on connectrpc.com/connect. One cleartext port serves gRPC, gRPC-Web
-// and Connect JSON; no h2c wrapper since Go 1.24.
+// Package grpc is a THROWAWAY stub of the go-boot gRPC Transport Starter as
+// settled in #12. It owns NO server, no Component and no config: connect-go's
+// generated constructor returns (string, http.Handler), which is exactly
+// web.Server.Handle. What is left is handler options.
 package grpc
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
-	gbhttp "goboot-prototype/goboot/http"
+	"connectrpc.com/connect"
 )
 
-type Config struct {
-	Addr string `yaml:"addr"`
-}
-
-type Server struct {
-	srv *gbhttp.Server
-}
-
-func New(cfg Config, log *slog.Logger) *Server {
-	if cfg.Addr == "" {
-		cfg.Addr = ":8081"
+// DefaultOptions is a slice you can edit, the same shape as
+// web.DefaultMiddleware. No logging interceptor: web's middleware already ran,
+// so goboot.LoggerFrom(ctx) reaches the handler free.
+func DefaultOptions(log *slog.Logger) []connect.HandlerOption {
+	return []connect.HandlerOption{
+		connect.WithRecover(func(_ context.Context, _ connect.Spec, _ http.Header, v any) error {
+			log.Error("panic in rpc", "err", v)
+			return connect.NewError(connect.CodeInternal, errors.New("internal"))
+		}),
+		connect.WithInterceptors(sanitiseErrors(log)),
+		connect.WithRequireConnectProtocolHeader(),
 	}
-	return &Server{srv: gbhttp.Named("grpc", gbhttp.Config{Addr: cfg.Addr}, log)}
 }
 
-// Mount takes the exact two-value return of a connect-go generated
-// constructor, so the call site is:
-//
-//	grpcSrv.Mount(greetv1connect.NewGreetServiceHandler(svc))
-func (s *Server) Mount(pattern string, h http.Handler) { s.srv.Handle(pattern, h) }
-
-func (s *Server) Name() string                    { return "grpc" }
-func (s *Server) Start(ctx context.Context) error { return s.srv.Start(ctx) }
-func (s *Server) Stop(ctx context.Context) error  { return s.srv.Stop(ctx) }
-func (s *Server) Addr() string                    { return s.srv.Addr() }
+// sanitiseErrors replaces any non-*connect.Error with a bare CodeUnknown and
+// logs the real one. Measured in #12: a bare error reaches the caller
+// verbatim, password and all.
+func sanitiseErrors(log *slog.Logger) connect.Interceptor {
+	return connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			res, err := next(ctx, req)
+			if err == nil {
+				return res, nil
+			}
+			var ce *connect.Error
+			if errors.As(err, &ce) {
+				log.Error("rpc failed", "procedure", req.Spec().Procedure, "code", ce.Code())
+				return res, err
+			}
+			// The access log records 200 for a failed gRPC call, so this line
+			// is where the truth lives.
+			log.Error("rpc failed", "procedure", req.Spec().Procedure, "err", err)
+			return nil, connect.NewError(connect.CodeUnknown, errors.New("unknown"))
+		}
+	})
+}

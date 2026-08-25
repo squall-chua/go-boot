@@ -17,7 +17,10 @@ _Avoid_: module (collides with Go modules — go-boot ships as one Go module), p
 
 **Preset**:
 A single function that wires several Starters together with defaults, written in plain Go
-so a reader can copy its body and edit it.
+so a reader can copy its body and edit it. A Preset takes **no options**: copying the body is
+the only way to change what it wires. Like a Starter, a Preset splits a dependency that only
+some of its users need into a subpackage of its own, because Go links by import. v1 ships
+exactly one Preset, `preset.Full`, and its tracing twin `traced.Full`.
 _Avoid_: auto-configuration, magic, bundle
 
 **Component**:

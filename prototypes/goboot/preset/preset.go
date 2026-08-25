@@ -1,68 +1,55 @@
-// Package preset is a THROWAWAY stub of go-boot's HTTP-shaped Presets.
+// Package preset holds go-boot's Presets. There is exactly one in v1.
 //
-// Presets CANNOT live in package goboot: the standing rule from #3 says the
-// base package must never import a Starter subpackage, and a Preset's whole job
-// is importing Starters. They also cannot all live in ONE package, or an
-// HTTP-only user would pull gRPC and Postgres through the Preset. Hence this
-// package (http + actuator) and preset/service (+ grpc + db).
+// A Preset is a single function that wires several Starters with defaults. It
+// has NO options: to change it, copy the body of Full into your own main. The
+// copy is not a fallback, it is the supported escape hatch — see
+// cmd/full/explicit.go, which is that copy, compiled.
+//
+// This package deliberately does NOT import goboot/trace. OTel costs +9.4 MB
+// stripped and 19 indirect modules, so a service that runs no collector must
+// not link it. The tracing twin lives in goboot/preset/traced.
 package preset
 
 import (
+	"database/sql"
+	"io/fs"
+
 	"goboot-prototype/goboot"
 	"goboot-prototype/goboot/actuator"
-	gbhttp "goboot-prototype/goboot/http"
+	"goboot-prototype/goboot/db"
+	"goboot-prototype/goboot/web"
 )
 
-// Config is the go-boot slice of a service's config file.
 type Config struct {
 	Log      goboot.LogConfig `yaml:"log"`
-	HTTP     gbhttp.Config    `yaml:"http"`
+	Web      web.Config       `yaml:"web"`
+	DB       db.Config        `yaml:"db"`
 	Actuator actuator.Config  `yaml:"actuator"`
 }
 
-// App is what a Preset hands back: the base App plus the Starters it wired.
-// Nothing is started yet, so main can still mount routes and add Components.
+// App is what the Preset hands back. The embedded *goboot.App is the escape
+// hatch that matters: app.Add(myConsumer) still works.
 type App struct {
 	*goboot.App
-	Cfg      Config
-	HTTP     *gbhttp.Server
-	Actuator *actuator.Actuator // nil from HTTP()
+	Web *web.Server
+	DB  *sql.DB
 }
 
-// HTTP is the smallest Preset: logger + HTTP Transport. No config file.
-func HTTP(addr string) (*App, error) {
-	cfg := Config{HTTP: gbhttp.Config{Addr: addr}}
-	base, err := goboot.New(cfg.Log)
+// Full wires every v1 Starter except tracing. migrations may be nil.
+// Nothing is started yet.
+func Full(cfg Config, migrations fs.FS) (*App, error) {
+	app, err := goboot.New(cfg.Log)
 	if err != nil {
 		return nil, err
 	}
-	a := &App{App: base, Cfg: cfg, HTTP: gbhttp.New(cfg.HTTP, base.Log)}
-	a.Add(a.HTTP)
-	return a, nil
-}
-
-// Web is the realistic default: config file + logger + HTTP Transport + Actuator.
-func Web(configPath, envPrefix string) (*App, error) {
-	var cfg Config
-	if err := goboot.Load(configPath, envPrefix, &cfg); err != nil {
-		return nil, err
-	}
-	return WebWith(cfg)
-}
-
-// WebWith is the same Preset for a service that owns its own config struct
-// (embedding Config with `yaml:",inline"`) and has already loaded it.
-func WebWith(cfg Config) (*App, error) {
-	base, err := goboot.New(cfg.Log)
+	pool, database, err := db.New(cfg.DB, app.Log, migrations)
 	if err != nil {
 		return nil, err
 	}
-	a := &App{
-		App:  base,
-		Cfg:  cfg,
-		HTTP: gbhttp.New(cfg.HTTP, base.Log),
-	}
-	a.Actuator = actuator.New(cfg.Actuator, base.Log, base.Level)
-	a.Add(a.Actuator, a.HTTP) // Actuator up first, down last
-	return a, nil
+	act := actuator.New(cfg.Actuator, app)
+	srv := web.New(cfg.Web, app.Log)
+	srv.Use(web.DefaultMiddleware(app.Log)...) // forget this and a panic returns NO response
+	act.MountOn(srv)                           // forget this and there is no /readyz
+	app.Add(act, database, srv)                // order is ignored; Tier decides
+	return &App{App: app, Web: srv, DB: pool}, nil
 }

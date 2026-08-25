@@ -12,7 +12,10 @@ import (
 
 // greeter is the Service Layer: plain Go, knows nothing about HTTP or gRPC.
 // Both Transports call into it. Shared by the Preset and explicit forms.
-type greeter struct{ db *sql.DB }
+type greeter struct {
+	db       *sql.DB
+	greeting string
+}
 
 func (g *greeter) Greet(ctx context.Context, name string) (string, error) {
 	var greeting string

@@ -6,6 +6,13 @@ throwaway, not the library).
 
 **Nothing here is a decision.** It is what fell out of writing the call sites and running them.
 
+> **Amended 2026-08-25 by [#14](https://github.com/squall-chua/go-boot/issues/14).** The code under
+> `prototypes/` was rewritten to the contract settled in #8 through #13, so **the line counts in
+> section 1 below are the old shape and are superseded by section 7**. `goboot/http` is now
+> `goboot/web`, `goboot/preset` holds one Preset, and `goboot/trace` is a new signature-only stub.
+> Notes 4.3, 4.5, 4.6 and 4.7 are closed; note 3 is closed by #2 Q21. The prototype still
+> compiles and vets, and section 7 adds one passing test; `cmd/full` is still never run.
+
 ---
 
 ## 1. Line counts
@@ -288,3 +295,83 @@ prototype had to pick one.
   both forms roughly equally, so the Preset-versus-explicit *delta* should hold.
 - **`cmd/full` was never run** — it needs Postgres. It compiles and vets clean, and that is all
   that is claimed for it.
+
+---
+
+## 7. Re-measure for #14 — the explicit form against the Preset, under the settled contract
+
+Rewritten 2026-08-25. `go build ./...`, `go vet ./...`, `go test ./...` and `gofmt -l .` all clean.
+`go.mod` and `go.sum` are unchanged, so the weight numbers stay comparable with earlier tickets.
+
+Same method as section 1: **wiring** is lines in the run function that exist only to bootstrap
+go-boot. Route mounts and the Service Layer are excluded.
+
+| `cmd/full` | wiring | + config struct |
+|---|---:|---:|
+| Preset (`traced.Full`) | **9** | 12 |
+| explicit | **22** | 29 |
+| saved | **13 (59%)** | 17 (59%) |
+
+**This was expected to shrink and it did not.** #8 removed one line (`act.Ready`), and #10, #11 and
+#12 put four back (`trace.New` and its error block, `srv.Use(...)`, `act.MountOn(srv)`). The
+explicit form went 21 → 22 and the Preset went 8 → 9, the extra line being note 4.3's config load,
+which cannot live inside a Preset for any service that owns a config key.
+
+### What the Preset encodes, which is the yardstick #2 Q22 actually set
+
+Only **two** call-site rules survive, and both are one-liners:
+
+- `srv.Use(trace.DefaultMiddleware(app.Log)...)` — **fails silently.** #11 measured that a
+  panicking handler with no recovery middleware returns *no response at all*.
+- `act.MountOn(srv)` — **fails loudly.** No `/readyz`, so the pod never goes ready.
+
+Everything else left the Preset: start order → Tier (#8), readiness → `app.Checks()` (#8), goose
+session locking → `db.NewProvider` (#13), drain order and delay → `App.Run` (#8). And
+`grpc.DefaultOptions(app.Log)` — the line whose absence sends a raw error to the caller — stays in
+`main` in *both* forms, because the mount names the user's generated package.
+
+### Middleware order is a third rule, and `Use` alone cannot express it
+
+`goboot/web/web_test.go` (`TestUseOrder`, passing) pins the semantics: `Use` appends, so a later
+`Use` call lands **innermost**. Therefore
+
+```go
+srv.Use(web.DefaultMiddleware(app.Log)...)
+srv.Use(trace.Middleware())
+```
+
+gives `RequestID → Logging → Recovery → trace → handler`, with tracing innermost. The access-log
+line then cannot carry the trace ID, because `Logging` wrapped before the span existed. The order
+that works is `RequestID → trace → Logging → Recovery`, which is why `goboot/trace` exports
+`trace.DefaultMiddleware(log)` — the same slice-you-can-edit shape as `web.DefaultMiddleware`, one
+word different at the call site.
+
+This is also why `traced.Full` is a **copy** of `preset.Full` and not a wrapper around it: by the
+time the plain Preset has returned, the middleware order is already fixed.
+
+### Weight
+
+Stripped, `go build -ldflags="-s -w"`, counting linked non-stdlib module roots:
+
+| binary | modules | bytes |
+|---|---:|---:|
+| `cmd/http-only` | 1 | 6,414,601 |
+| `cmd/http-actuator-config` | 10 | 9,363,721 |
+| `cmd/full` | 21 | 14,405,897 |
+
+Note 3's leak is gone, and #2 Q21 is why: with one Preset, only the full-surface binary imports it.
+
+**Caveat: `goboot/trace` is signature-only and imports no OTel.** Everything above measures
+call-site shape, which is real. The +9.4 MB and 19 modules that decided Q4 are #10's measurement,
+not this session's.
+
+### The import-leak check
+
+`prototypes/scripts/check-imports.sh` is a working prototype of the CI check #14 owns. All four
+assertions run against the prototype and pass. **It was also verified to fail**: importing
+`goboot/trace` from `goboot/preset` makes assertion 2 report
+`FAIL goboot/preset reaches goboot/trace` and the script exit 1.
+
+Assertion 4 (pinned module counts, `scripts/module-counts.txt`) could not be shown firing here,
+because the trace stub adds no modules. In the real repo that leak moves `goboot/preset` from 15
+modules to roughly 34.
