@@ -15,8 +15,8 @@ Early. What works today is HTTP routes served by a real listener, started and st
 order, with a clean shutdown on SIGTERM; config from a file and the environment; the default
 middleware set with the response helpers below; the Actuator; the database Starter, with a
 real PostgreSQL for tests; the gRPC Transport; tracing; and the Presets. That is the whole library
-surface `docs/spec.md` locks. What is left is the CI import-leak check, and the Scaffold, which
-that spec defers past v1.
+surface `docs/spec.md` locks, and CI keeps the import-leak check on it. What is left is the
+Scaffold, which that spec defers past v1.
 
 ## Install
 

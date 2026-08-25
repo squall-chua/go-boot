@@ -1,0 +1,12 @@
+goboot 2
+goboot/actuator 11
+goboot/db 7
+goboot/db/dbtest 15
+goboot/grpc 4
+goboot/grpc/health 5
+goboot/grpc/reflection 3
+goboot/preset 16
+goboot/preset/traced 36
+goboot/trace 25
+goboot/trace/rpc 10
+goboot/web 2

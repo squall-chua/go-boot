@@ -1326,6 +1326,31 @@ The check must cover **every package a short path imports, not just `goboot`** �
 written missed `goboot/preset`, whose Preset dragged the Actuator into an HTTP-only binary: 10
 modules and 12.4 MB against 1 module and 9.2 MB.
 
+> **Built by [#32](https://github.com/squall-chua/go-boot/issues/32).** The check is
+> `.github/check-imports.sh`, run by CI on every push, with the golden counts of assertion 4 in
+> `.github/module-counts.txt` and regenerated only by `.github/check-imports.sh --update`. All four
+> assertions were **proven to fail** against a real violation before they were trusted to pass: a
+> base test importing `goboot/web` fails 1, `goboot/preset` importing `goboot/trace` fails 2,
+> `goboot/db` blank-importing `pgx/v5/stdlib` fails 3, and `goboot/web` importing
+> `prometheus/client_golang` fails 4 **and nothing else** — which is assertion 4 doing the job the
+> other three cannot. The four injections and their output are recorded on #32.
+>
+> **A seventh package joins assertion 2.** `goboot/preset/traced` is not a short path, but it is the
+> one package allowed to reach `goboot/trace`, so it is checked against the other four heavy
+> packages. Without that it is the obvious place for the next heavy dependency to hide: a twin that
+> may reach one heavy package reads, to the next person, as a twin the rule does not apply to.
+>
+> **Two numbers moved.** The prediction above was that the trace leak takes `goboot/preset` from 15
+> modules to roughly 34; measured, it is **16 to 36**. And the package list for assertion 4 is read
+> from `go list ./...` rather than written out, so a **new package is a golden-file change too**,
+> which is the same leak arriving by a different door.
+>
+> **Two Go tests keep the rules they already owned**, named in the script so the pair cannot drift:
+> `db/db_test.go`'s `TestStarterLinksNoDriver` is assertion 3 inside the package it guards, and
+> `trace/trace_test.go`'s `TestABuildWithNoTracingLinksNoTracing` is the tracing third of assertion
+> 2 and goes further than the script — it covers the examples, and asserts `goboot/trace` does not
+> link `otelconnect`, which is a rule about a heavy package rather than about a short path.
+
 ### 8.2 CI builds both forms of every Preset
 
 One example directory per Preset, holding the Preset form and the explicit form it expands to. CI
@@ -1335,8 +1360,13 @@ builds both. See [5. The Presets](#5-the-presets-and-what-each-wires).
 
 `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l .` clean.
 
-> **Not yet done.** The real repository has no CI workflow at all. This section states what the
-> workflow must assert; wiring it up is build work, not a spec decision.
+> **Done.** The workflow is `.github/workflows/ci.yml`, on push and on pull request. It arrived a
+> gate at a time rather than all at once — the four gates above with the first route served, then
+> the query-layer neutrality build of ADR `0009` with [#26](https://github.com/squall-chua/go-boot/issues/26),
+> then both forms of the Preset for 8.2 with [#31](https://github.com/squall-chua/go-boot/issues/31),
+> which `go build ./...` and `go test ./...` cover because `examples/full` holds both. **Section 8
+> closes with [#32](https://github.com/squall-chua/go-boot/issues/32)**, which replaced the one
+> inline assertion with the whole check of 8.1.
 
 ---
 

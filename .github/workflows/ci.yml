@@ -26,22 +26,17 @@ jobs:
           fi
 
       - name: build
+        # This is also docs/spec.md 8.2, "CI builds both forms of every
+        # Preset": examples/full holds preset form and explicit form in one
+        # package main, so ./... compiles both. The test step below is
+        # stronger — see there.
         run: go build ./...
 
-      - name: base imports no Starter
-        # Assertion 1 of the import-leak check in docs/spec.md 8.1. go list
-        # -deps alone misses test imports, and it is test imports that go mod
-        # tidy leaks through, so ask for them by name. The other three
-        # assertions, and the golden module counts, are #32.
-        run: |
-          leaks="$(go list -f '{{join .Imports "\n"}}{{"\n"}}{{join .TestImports "\n"}}{{"\n"}}{{join .XTestImports "\n"}}' . \
-            | grep '^github.com/squall-chua/go-boot/' || true)"
-          if [ -n "$leaks" ]; then
-            echo "the base package or its tests import a Starter:"
-            echo "$leaks" | sort -u
-            exit 1
-          fi
-          echo "base package and its tests import no Starter"
+      - name: the import-leak check
+        # docs/spec.md 8.1, all four assertions. Each one was proven to fail
+        # against a real injected violation before it was trusted to pass;
+        # the injections and their output are recorded on #32.
+        run: .github/check-imports.sh
 
       - name: vet
         run: go vet ./...
@@ -65,4 +60,9 @@ jobs:
           key: embedded-postgres-${{ runner.os }}-18.3.0
 
       - name: test
+        # Carries docs/spec.md 8.2 past a build: examples/full's
+        # TestBothFormsServeTheSameService drives the Preset form AND the
+        # explicit form against a real PostgreSQL and asserts they serve the
+        # same service, so a copy that still compiles but has drifted fails
+        # here rather than passing quietly.
         run: go test ./...

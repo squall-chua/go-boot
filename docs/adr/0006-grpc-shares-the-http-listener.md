@@ -24,7 +24,15 @@ connect safe by default: panic recovery, error sanitising, and the required prot
   outright that the address belongs to `goboot/web`.
 - **`goboot/grpc` depends on `goboot/web`.** This softens the map's "HTTP and gRPC are independent
   Starters" to *independent in protocol and code generation, sharing one listener*. It costs no
-  weight: a build importing only the base and `goboot/web` links **0** third-party modules.
+  weight: `goboot/web` adds **0** third-party modules over the base package.
+
+  > **Measured by [#32](https://github.com/squall-chua/go-boot/issues/32),** which
+  > [#28](https://github.com/squall-chua/go-boot/issues/28) asked for. This line first said a build
+  > importing only the base and `goboot/web` links **0** third-party modules, full stop. It links
+  > **2**: `go.yaml.in/yaml/v3` and `github.com/go-viper/mapstructure/v2`, both pulled in by the
+  > base package's config binding, neither by `goboot/web`. The two lists are identical, so the
+  > claim this ADR needs — that leaning on `goboot/web` is free — holds exactly as stated; only the
+  > absolute number was wrong. `.github/module-counts.txt` pins both at 2.
 - **A gRPC-only service hosts the Actuator for free.** #10's fallback — "or the user sets
   `actuator.addr` and the Actuator runs its own listener" — is dead, because a gRPC-only service
   already has a `web.Server`.
