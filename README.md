@@ -212,6 +212,34 @@ choice was leaving `writeTimeout` off so a write deadline cannot cut a stream in
 **The one number to know is the 10s stop timeout.** That is what cuts a long-lived stream on
 shutdown: `Stop` waits for open streams until the timeout expires, then drops them.
 
+### Health and reflection
+
+Two more packages, `goboot/grpc/health` and `goboot/grpc/reflection`. **Both are opt-in by
+import**: a service that wants neither links neither, and that is checked by a test reading the
+linked module list. Once imported there is nothing to configure.
+
+```go
+srv.Handle(health.New(app))                                  // the standard gRPC health service
+reflection.MountOn(srv, greetv1connect.GreetServiceName)     // list the service with grpcurl
+```
+
+**Health answers the same question `/readyz` answers**, read from the same `App`: the App's
+readiness first, then every Component's `Check`. So a database outage that takes `/readyz` to 503
+takes gRPC health to `NOT_SERVING` in the same breath, and **drain costs nothing** — readiness turns
+false at the first moment of shutdown, before the drain delay, so both answers turn over together.
+
+Only the empty service name is answered. Any other name is `NOT_FOUND`: per-service statuses are
+not in v1. The streaming `Watch` RPC is not implemented, because `grpc-health-probe` and Kubernetes
+both poll `Check`.
+
+**Reflection mounts both handlers**, the current one and the older `v1alpha`, because `grpcurl`
+still asks for `v1alpha`. You pass the generated `...ServiceName` constants, because connect keeps
+no registry of what has been mounted. That is also why it is `MountOn` rather than a pair handed to
+`Handle` the way `health.New` is: two mounts do not fit in one pair.
+
+The package is called `reflection` and not `reflect`, so a `main` that imports the standard
+library's `reflect` never has to alias one of them.
+
 ### Codegen
 
 go-boot requires nothing. It never runs codegen and never imports your generated code — you pass

@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -446,4 +447,61 @@ func TestEmbeddingTheServiceLayerDoesNotCompile(t *testing.T) {
 			t.Errorf("the compiler no longer says %q, so the README is wrong:\n%s", want, out)
 		}
 	}
+}
+
+// TestTheOptionalSubpackagesAreNotLinkedByTheTransport reads the
+// optional-subpackage rule straight off the linked module list. Go links by
+// import, so the only proof that goboot/grpc/health and goboot/grpc/reflection
+// are free for a service that wants neither is that neither module appears in
+// the Transport's own dependency list.
+//
+// The other half matters too: each subpackage must link ITS module and not
+// the other one, or importing health would quietly pay for reflection.
+func TestTheOptionalSubpackagesAreNotLinkedByTheTransport(t *testing.T) {
+	t.Parallel()
+
+	const (
+		healthMod     = "connectrpc.com/grpchealth"
+		reflectionMod = "connectrpc.com/grpcreflect"
+	)
+	for _, tc := range []struct {
+		pkg      string
+		linked   []string
+		unlinked []string
+	}{
+		{"grpc", nil, []string{healthMod, reflectionMod}},
+		{"grpc/health", []string{healthMod}, []string{reflectionMod}},
+		{"grpc/reflection", []string{reflectionMod}, []string{healthMod}},
+	} {
+		mods := linkedModules(t, "github.com/squall-chua/go-boot/"+tc.pkg)
+		for _, want := range tc.linked {
+			if !slices.Contains(mods, want) {
+				t.Errorf("goboot/%s does not link %s: %v", tc.pkg, want, mods)
+			}
+		}
+		for _, notWant := range tc.unlinked {
+			if slices.Contains(mods, notWant) {
+				t.Errorf("goboot/%s links %s, which only its importers should pay for", tc.pkg, notWant)
+			}
+		}
+	}
+}
+
+// linkedModules is what ends up in the binary, one module path per line. The
+// build dependencies only: test imports are a separate question, answered by
+// assertion 1 of the import-leak check in docs/spec.md 8.1.
+func linkedModules(t *testing.T, pkg string) []string {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(),
+		"go", "list", "-deps", "-f", "{{if .Module}}{{.Module.Path}}{{end}}", pkg).CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list -deps %s: %v\n%s", pkg, err, out)
+	}
+	var mods []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" && !slices.Contains(mods, line) {
+			mods = append(mods, line)
+		}
+	}
+	return mods
 }

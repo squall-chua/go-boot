@@ -4,6 +4,8 @@ go 1.25.7
 
 require (
 	connectrpc.com/connect v1.20.0
+	connectrpc.com/grpchealth v1.5.0
+	connectrpc.com/grpcreflect v1.3.0
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/jackc/pgx/v5 v5.10.0
