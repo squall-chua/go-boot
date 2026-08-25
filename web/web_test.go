@@ -13,11 +13,15 @@ import (
 	"github.com/squall-chua/go-boot/web"
 )
 
+// quick keeps the drain delay out of the way. These tests are about the HTTP
+// server, and the real five-second default would be paid by every one of them.
+var quick = goboot.LifecycleConfig{DrainDelay: time.Nanosecond}
+
 // TestServeOneRoute is the tracer bullet: build an App, mount one route, run
 // it on a real listener, reach it with an ordinary client, and stop it. No
 // mocks and no test doubles for anything go-boot owns.
 func TestServeOneRoute(t *testing.T) {
-	app, err := goboot.New(goboot.Config{})
+	app, err := goboot.New(goboot.Config{Lifecycle: quick})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -62,7 +66,7 @@ func TestServeOneRoute(t *testing.T) {
 // lets these tests run in parallel.
 func TestPortZeroIsResolved(t *testing.T) {
 	t.Parallel()
-	app, err := goboot.New(goboot.Config{Log: goboot.LogConfig{Level: "ERROR"}})
+	app, err := goboot.New(goboot.Config{Log: goboot.LogConfig{Level: "ERROR"}, Lifecycle: quick})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -102,7 +106,7 @@ func TestUseOrder(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
 
-	app, err := goboot.New(goboot.Config{Log: goboot.LogConfig{Level: "ERROR"}})
+	app, err := goboot.New(goboot.Config{Log: goboot.LogConfig{Level: "ERROR"}, Lifecycle: quick})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -21,7 +21,9 @@ const (
 type Component interface {
 	Name() string
 	Tier() Tier
-	// Start returns once the Component is ready and must not block. The
+	// Start returns once the Component is ready and must not block. Its ctx
+	// carries the start timeout and is cancelled once the whole start
+	// sequence is over, so it is not a ctx to keep for background work. The
 	// channel reports a failure that happens after startup; return nil if
 	// that cannot happen.
 	Start(ctx context.Context) (<-chan error, error)
