@@ -1633,10 +1633,18 @@ The same five steps for every tag, `v0` and `v1` alike.
    `gh release create vX.Y.Z --notes-file ...` — carrying everything in the list below. There is
    no `CHANGELOG.md`: the tag and its notes are one object, and the issue tracker is already on
    GitHub.
-4. **Tag `main` directly**: `git tag vX.Y.Z && git push origin vX.Y.Z`. There is no release branch —
-   go-boot commits to `main`, and one module with one tag has nothing to branch for.
-5. **Confirm the proxy serves it**:
+4. **Tag `main` directly, annotated**: `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
+   Annotated, because a lightweight tag records no tagger and no date, which is most of what a
+   release tag is for. There is no release branch — go-boot commits to `main`, and one module with
+   one tag has nothing to branch for.
+5. **Confirm the tag resolves.** While the repository is public, ask the proxy:
    `GOPROXY=https://proxy.golang.org go list -m github.com/squall-chua/go-boot@vX.Y.Z`.
+   **While it is private the proxy answers 404, and that is not a failed release** — it cannot read
+   the repository at all. Check the tag itself instead, the way a user with access would:
+   `GOPRIVATE=github.com/squall-chua/* GOPROXY=direct go list -m github.com/squall-chua/go-boot@vX.Y.Z`.
+   Note what that means while it lasts: **a tag alone does not make go-boot dependable by an outside
+   user — the repository has to be public too.** That is a visibility decision, not a versioning one,
+   and this policy does not make it.
 
 ### What every release note carries
 
