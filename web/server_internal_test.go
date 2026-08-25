@@ -83,6 +83,54 @@ func TestTLSIsTwoKeys(t *testing.T) {
 	}
 }
 
+// TestHTTP2OverTLSStaysOn is the other half of the Protocols set. Assigning a
+// Protocols value replaces Go's default outright — the zero value is an EMPTY
+// set — so SetHTTP2(true) is the line that keeps HTTP/2 alive over TLS. Drop
+// it while turning cleartext HTTP/2 on and every TLS user silently falls back
+// to HTTP/1 with nothing logged anywhere.
+func TestHTTP2OverTLSStaysOn(t *testing.T) {
+	t.Parallel()
+	certFile, keyFile := selfSignedCert(t)
+
+	cfg := Config{Addr: "127.0.0.1:0"}
+	cfg.TLS.CertFile, cfg.TLS.KeyFile = certFile, keyFile
+	s := New(cfg, slog.New(slog.DiscardHandler))
+	s.HandleFunc("GET /x", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.Proto)
+	})
+
+	if _, err := s.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Stop(context.Background()) })
+
+	// The client has to offer h2 as well: a Transport with its own
+	// TLSClientConfig does not attempt HTTP/2 unless it is asked to. Without
+	// these two lines the test measures the client, not the server.
+	tr := &http.Transport{
+		//nolint:gosec // the certificate is generated in this test
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Protocols:       &http.Protocols{},
+	}
+	tr.Protocols.SetHTTP1(true)
+	tr.Protocols.SetHTTP2(true)
+
+	client := &http.Client{Transport: tr}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "https://"+s.Addr()+"/x", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("HTTPS GET: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.ProtoMajor != 2 || string(body) != "HTTP/2.0" {
+		t.Errorf("served %s and the handler saw %q, want HTTP/2 both ways", resp.Proto, body)
+	}
+}
+
 // selfSignedCert writes a throwaway certificate and key to t.TempDir and
 // returns the two paths.
 func selfSignedCert(t *testing.T) (certFile, keyFile string) {
