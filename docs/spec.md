@@ -44,9 +44,13 @@ These hold across every Starter.
 [#3](https://github.com/squall-chua/go-boot/issues/3): a consumer of the root package alone
 downloads 1 zip and 2.9 KB, against 18 zips and 106 MiB for the multi-module layout.
 
-**Import paths.** This file writes them as `goboot`, `goboot/web` and so on. The module path in
-front of them is not settled — see the name check in
-[11. Deferred past v1](#11-deferred-past-v1).
+**Module path: `github.com/squall-chua/go-boot`** ([#20](https://github.com/squall-chua/go-boot/issues/20)).
+The library packages sit at the repository root, so the base Starter is
+`github.com/squall-chua/go-boot` and binds to the identifier `goboot`, and a Starter is
+`github.com/squall-chua/go-boot/web`. For brevity this file writes those short forms — `goboot`,
+`goboot/web` — everywhere below; they are package identifiers, not literal import paths. No example
+in this spec needs an import alias, checked against every call site in `prototypes/`
+(`docs/research/module-path.md`).
 
 **Go version floor: `go 1.25.0`** ([#16](https://github.com/squall-chua/go-boot/issues/16)).
 Note that `go mod tidy` will write **`go 1.25.7`** into `go.mod`, because `goose/v3` declares a
@@ -1264,8 +1268,6 @@ In scope for go-boot, but not in this spec and not blocking it.
   here deliberately: settle it once for HTTP and gRPC together, not twice.
 - **Versioning and release policy** — one tag for one module, and what stability v1 promises.
 - **Docs and examples strategy** — how a newcomer learns this in ten minutes.
-- **Name check** — whether `goboot` as an import name and `go-boot` as a project name collide with
-  anything that already exists. **The module path in this spec is unresolved until this is done.**
 
 ---
 
