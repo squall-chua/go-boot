@@ -30,8 +30,8 @@ type LifecycleConfig struct {
 	StopTimeout  time.Duration `yaml:"stopTimeout"`  // the whole stop sequence; default 10s
 }
 
-// Config is what New takes. Later Starters add their own sections beside it.
-// Loading any of this from a file or the environment is #23.
+// Config is what New takes. Later Starters add their own sections beside it,
+// and Load fills the whole struct from a file and the environment.
 type Config struct {
 	Log       LogConfig       `yaml:"log"`
 	Lifecycle LifecycleConfig `yaml:"lifecycle"`
