@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+// The service go-boot's own gRPC tests mount. It is not shipped to users and
+// it is not importable: internal/gen is inside internal/. The Scaffold writes
+// a proto of the same shape into a new project.
+package greet.v1;
+
+option go_package = "github.com/squall-chua/go-boot/internal/gen/greet/v1;greetv1";
+
+message GreetRequest {
+  string name = 1;
+}
+
+message GreetResponse {
+  string greeting = 1;
+}
+
+message GreetStreamRequest {
+  string name = 1;
+}
+
+message GreetStreamResponse {
+  string greeting = 1;
+}
+
+service GreetService {
+  rpc Greet(GreetRequest) returns (GreetResponse) {}
+
+  // Server streaming, because docs/spec.md 4.4 claims streaming works and a
+  // claim in that file is meant to have a test under it.
+  rpc GreetStream(GreetStreamRequest) returns (stream GreetStreamResponse) {}
+}

@@ -3,12 +3,14 @@ module github.com/squall-chua/go-boot
 go 1.25.7
 
 require (
+	connectrpc.com/connect v1.20.0
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.24.1
 	go.yaml.in/yaml/v3 v3.0.5
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -29,5 +31,4 @@ require (
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 )

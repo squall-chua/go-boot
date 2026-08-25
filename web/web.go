@@ -78,12 +78,37 @@ func New(cfg Config, log *slog.Logger) *Server {
 			ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 			IdleTimeout:       cfg.IdleTimeout,
 			// WriteTimeout stays off: gRPC streams share this server.
+			Protocols: protocols(),
 		},
 		errc:    make(chan error, 1),
 		maxBody: cfg.MaxBodyBytes,
 	}
 	s.tls.certFile, s.tls.keyFile = cfg.TLS.CertFile, cfg.TLS.KeyFile
 	return s
+}
+
+// protocols turns on cleartext HTTP/2 alongside HTTP/1. This is what makes
+// ADR 0006 true: the gRPC protocol needs HTTP/2, and behind an ingress the
+// hop go-boot answers is cleartext, so without this a plain gRPC client gets
+// `frame too large, note that the frame header looked like an HTTP/1.1
+// header` and nothing else, and the access log records a 400 for method=PRI.
+// Measured for [#28]: delete a line here and both
+// TestCleartextHTTP2IsOn below and TestAGRPCClientIsUnaffectedByTheProtocolHeader
+// in goboot/grpc fail.
+//
+// Go's default leaves HTTP/2 to TLS only. With both HTTP/1 and unencrypted
+// HTTP/2 on, net/http reads the client preface to tell them apart, so one
+// port answers gRPC, gRPC-Web, Connect JSON and plain REST at once. Since Go
+// 1.24 this needs no golang.org/x/net/http2 and no h2c wrapper.
+//
+// It is not a config key. A port that refuses gRPC is not a choice go-boot
+// offers, because the whole gRPC Starter rests on this.
+func protocols() *http.Protocols {
+	p := &http.Protocols{}
+	p.SetHTTP1(true)
+	p.SetHTTP2(true)            // over TLS, by ALPN
+	p.SetUnencryptedHTTP2(true) // h2c, which is the hop behind an ingress
+	return p
 }
 
 // Handle mounts a handler. It takes the two-value return of a connect-go

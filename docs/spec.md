@@ -503,6 +503,16 @@ func WriteJSON(w http.ResponseWriter, status int, v any)
 func DecodeJSON(r *http.Request, out any) error
 ```
 
+> **Amended by [#28](https://github.com/squall-chua/go-boot/issues/28).** This section was silent on
+> a protocol setting every user of `goboot/web` now gets: the server sets `http.Server.Protocols`
+> with **HTTP/1, HTTP/2 over TLS, and unencrypted HTTP/2** all on. Go's default leaves HTTP/2 to
+> TLS, and ADR `0006` needs cleartext HTTP/2 or a plain gRPC client cannot reach the shared
+> listener at all — measured, `TestCleartextHTTP2IsOn` fails without it. Two consequences an
+> HTTP-only user should read: net/http tells the two apart by the **client preface**, so an
+> ordinary HTTP/1 client is untouched (`TestHTTP1StillWorks`); and it is **not a config key**,
+> because the gRPC Starter rests on it. See the amendment in
+> [4.4](#44-gobootgrpc--the-grpc-transport-starter).
+
 **Router: stdlib `net/http` only.** Measured on Go 1.26.3, `http.ServeMux` already gives 405 with
 an `Allow` header, `HEAD` following `GET`, `{$}` anchoring, a registration-time panic on ambiguous
 patterns naming both files and lines, and `r.Pattern`. `r.Pattern` is the important one: it is the
@@ -577,6 +587,15 @@ Settled in [#12](https://github.com/squall-chua/go-boot/issues/12). ADR `0006`.
 `(string, http.Handler)`, which is exactly `web.Server.Handle(pattern, h)`. A connect service
 mounts on the HTTP Starter's listener with no adapter and no second port.
 
+> **Amended by [#28](https://github.com/squall-chua/go-boot/issues/28).** "Mounts on the HTTP
+> Starter's listener" needs one line in `goboot/web` that neither this section nor ADR `0006` asked
+> for: **`http.Server.Protocols` must have `SetUnencryptedHTTP2(true)`**. Go's default leaves
+> HTTP/2 to TLS, so without it a plain gRPC client gets `http2: frame too large, note that the
+> frame header looked like an HTTP/1.1 header` and the access log records a 400 for `method=PRI`.
+> Measured — a test in `goboot/grpc` fails without the line. It is not a config key, because the
+> whole Starter rests on it. Since Go 1.24 this costs no `golang.org/x/net/http2` and no h2c
+> wrapper.
+
 **There is no `grpc.addr` and no `Config` at all.** It is the first Starter with none, and the
 missing key is the first thing a reader will look for, so the documentation must say it outright.
 The address belongs to `goboot/web`. Two ports is `web.New` called twice.
@@ -605,6 +624,14 @@ already run, so `goboot.LoggerFrom(ctx)` and the request ID reach the connect ha
 interface wants `Greet(ctx, *connect.Request[...])` and the Service Layer already owns the name
 `Greet`, so embedding gives a confusing ambiguity error. The gRPC Transport is a separate thin
 type:
+
+> **Amended by [#28](https://github.com/squall-chua/go-boot/issues/28).** The ambiguity error needs
+> one more condition than this line gives it. Measured, both shapes: embedding the Service Layer
+> alone gives `wrong type for method Greet` with a readable `have`/`want` pair; the confusing
+> `ambiguous selector *badB.Greet` appears only when the generated `Unimplemented...` type is
+> embedded **as well**, which is the common case, since that is what a user embeds for forward
+> compatibility. The conclusion stands — write the adapter type — but the documentation should show
+> both errors rather than promise the second one.
 
 ```go
 type grpcGreeter struct{ svc *greeter }
@@ -1162,7 +1189,7 @@ pinning.
 | `github.com/go-viper/mapstructure/v2` | v2.5.0 | base (config) | [#9](https://github.com/squall-chua/go-boot/issues/9) | relaxed key matching and type-directed comma lists need reflection the hand loader would have to write. **Zero transitive dependencies**: 1 `go.sum` module, 1 linked module |
 | `github.com/prometheus/client_golang` | v1.24.1 | actuator | [#7](https://github.com/squall-chua/go-boot/issues/7) | `promhttp.Handler()` over the default registry. Two pipelines, not one: Prometheus for metrics, OTel for traces |
 | `connectrpc.com/connect` | v1.20.0 | grpc | [#5](https://github.com/squall-chua/go-boot/issues/5) | proven by experiment: a real `grpc-go` client reached it over cleartext with no proxy, and one port served Connect JSON and gRPC-Web too. CNCF sandbox. grpc-gateway's in-process mode is unary-only and kills interceptors; Vanguard is still alpha after three years |
-| `google.golang.org/protobuf` | v1.36.11 | grpc (indirect), actuator (indirect) | [#5](https://github.com/squall-chua/go-boot/issues/5) | comes with connect. gRPC costs exactly these two modules and +3.57 MB |
+| `google.golang.org/protobuf` | v1.36.11 | grpc, actuator (indirect) | [#5](https://github.com/squall-chua/go-boot/issues/5) | comes with connect. gRPC costs exactly these two modules and +3.57 MB. **Amended by [#28](https://github.com/squall-chua/go-boot/issues/28):** direct, not indirect — go-boot's own gRPC tests mount a generated service, and the generated code under `internal/gen` imports protobuf by name. Nothing a user links changes |
 | `github.com/pressly/goose/v3` | v3.27.3 | db | [#6](https://github.com/squall-chua/go-boot/issues/6) | driven through `NewProvider` in-process. ⚠️ **goose does not lock unless told to** — `lock.NewPostgresSessionLocker()` is wired on by default. Atlas ruled out twice (its library never locks, and the real revision store is behind a paid binary); golang-migrate blocks uncancellably and carries the dirty flag |
 | `go.opentelemetry.io/otel` and its SDK | v1.45.0 | trace | [#7](https://github.com/squall-chua/go-boot/issues/7), [#10](https://github.com/squall-chua/go-boot/issues/10) | traces only. **+9.4 MB stripped and 19 indirect modules**, which is why it is a separate Starter |
 | `.../contrib/instrumentation/net/http/otelhttp` | v0.70.0 | trace | [#7](https://github.com/squall-chua/go-boot/issues/7) | HTTP spans, span name from `r.Pattern` |

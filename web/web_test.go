@@ -138,3 +138,78 @@ func TestUseOrder(t *testing.T) {
 		t.Fatalf("order = %q, want %q", got, want)
 	}
 }
+
+// TestCleartextHTTP2IsOn pins ADR 0006's load-bearing line. The gRPC protocol
+// needs HTTP/2, and the hop go-boot answers behind an ingress is cleartext, so
+// Go's default of HTTP/2-over-TLS-only is not enough. Without Protocols set
+// here a plain gRPC client gets `frame too large, note that the frame header
+// looked like an HTTP/1.1 header` and the access log records a 400 for
+// method=PRI. Since Go 1.24 this needs no golang.org/x/net/http2.
+func TestCleartextHTTP2IsOn(t *testing.T) {
+	app, err := goboot.New(goboot.Config{Lifecycle: quick})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	srv.HandleFunc("GET /hello", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.Proto)
+	})
+	app.Add(srv)
+	if err := app.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := app.Stop(ctx); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	tr := &http.Transport{Protocols: &http.Protocols{}}
+	tr.Protocols.SetUnencryptedHTTP2(true)
+	resp, err := (&http.Client{Transport: tr}).Get("http://" + srv.Addr() + "/hello")
+	if err != nil {
+		t.Fatalf("cleartext HTTP/2 GET: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.ProtoMajor != 2 || string(body) != "HTTP/2.0" {
+		t.Errorf("served %s and the handler saw %q, want HTTP/2 both ways", resp.Proto, body)
+	}
+}
+
+// TestHTTP1StillWorks is the other half: turning cleartext HTTP/2 on must not
+// cost the ordinary client anything. Go tells them apart by the client
+// preface.
+func TestHTTP1StillWorks(t *testing.T) {
+	app, err := goboot.New(goboot.Config{Lifecycle: quick})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	srv := web.New(web.Config{Addr: "127.0.0.1:0"}, app.Log)
+	srv.HandleFunc("GET /hello", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, r.Proto)
+	})
+	app.Add(srv)
+	if err := app.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := app.Stop(ctx); err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+	})
+
+	resp, err := http.Get("http://" + srv.Addr() + "/hello")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != "HTTP/1.1" {
+		t.Errorf("an ordinary client got %q, want HTTP/1.1", body)
+	}
+}

@@ -124,6 +124,111 @@ whitelist still applies there.
 `examples/http-actuator-config` is a service with the Actuator, the web Starter and its own config
 key, as a file you can run.
 
+## gRPC
+
+**There is no gRPC address and no gRPC config.** It is the first thing a reader looks for, so it is
+said outright. `goboot/grpc` owns no server, no `Component` and no config at all: the address
+belongs to `goboot/web`, and two ports is `web.New` called twice. See
+[ADR 0006](docs/adr/0006-grpc-shares-the-http-listener.md).
+
+connect-go's generated constructor returns `(string, http.Handler)`, which is exactly the shape of
+`web.Server.Handle`, so a connect service mounts on the HTTP listener with no adapter and no second
+port:
+
+```go
+srv.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+```
+
+One cleartext port answers gRPC, gRPC-Web, Connect JSON and plain REST at once. `web` turns on
+HTTP/2 over cleartext for this, which since Go 1.24 costs no extra module and no h2c wrapper.
+
+### Write the gRPC Transport type, always
+
+This is mandatory, not stylistic. The generated interface wants `Greet(ctx, *connect.Request[...])`
+and your Service Layer already owns the name `Greet`, so embedding the service does not work. Both
+compiler errors were measured:
+
+| what you wrote | what the compiler says |
+|---|---|
+| embed the Service Layer | `*badA does not implement GreetServiceHandler (wrong type for method Greet)`, then `have` and `want` |
+| embed the Service Layer **and** the generated `Unimplemented...` type | `*badB does not implement GreetServiceHandler (ambiguous selector *badB.Greet)` |
+
+The second is the confusing one, and it is the common case, because embedding the generated
+`Unimplemented...` type is what you do for forward compatibility. It never mentions the signatures
+at all — only that it cannot choose between two `Greet` methods.
+
+A separate thin type — the gRPC Transport, in this repo's language — is the way out, and it is
+four lines:
+
+```go
+type grpcGreeter struct{ svc *greeter }
+
+func (g *grpcGreeter) Greet(ctx context.Context, req *connect.Request[greetv1.GreetRequest]) (*connect.Response[greetv1.GreetResponse], error) {
+	out, err := g.svc.Greet(ctx, req.Msg.GetName())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&greetv1.GreetResponse{Greeting: out}), nil
+}
+```
+
+The Service Layer stays free of connect, and both Transports call the same `greeter`.
+
+### The default options
+
+```go
+grpc.DefaultOptions(app.Log)  // a slice you can edit, like web.DefaultMiddleware
+```
+
+Three entries: panic recovery, the error sanitiser, and connect's required protocol header.
+
+**The sanitiser is mandatory, not a nicety.** A bare `error` returned from a connect handler reaches
+the caller **verbatim**. Measured: `pq: password authentication failed for user "app" at
+10.0.0.5:5432` went out on the wire, host and username and all. The sanitiser replaces anything
+that is not already a `*connect.Error` with a bare `CodeUnknown` and logs the real one. An error you
+built yourself with `connect.NewError` passes through untouched.
+
+There is **no logging or request-ID interceptor**, and that is not an omission. Under the shared
+listener `web.DefaultMiddleware` has already run, so `goboot.LoggerFrom(ctx)` and the request ID
+reach your connect handler free.
+
+One honest asymmetry with `web.Use`: connect options are **per service**, not per server, so you
+repeat them at every mount. connect has no global registry and there is no way around it.
+
+### The access log records 200 for a failed gRPC call
+
+The gRPC and gRPC-Web status rides in **trailers**, not in the HTTP status line, so the access log
+line for a failed RPC says `"status":200`. Only the Connect protocol maps errors onto HTTP status
+codes. This is not a bug and it is not fixable from go-boot's side.
+
+**The sanitiser's `rpc failed` line is where the truth lives.** It carries the procedure, the code
+and the real error, tagged with the same `requestId` as the access line.
+
+### Streaming
+
+Streaming works, and there are no streaming helpers — connect does it, and go-boot's only relevant
+choice was leaving `writeTimeout` off so a write deadline cannot cut a stream in half.
+
+**The one number to know is the 10s stop timeout.** That is what cuts a long-lived stream on
+shutdown: `Stop` waits for open streams until the timeout expires, then drops them.
+
+### Codegen
+
+go-boot requires nothing. It never runs codegen and never imports your generated code — you pass
+the generated package in as a value. `buf` is the documented path only, and a repo with existing
+protos changes nothing. There is no `protoc-gen-goboot` and no Makefile: go-boot does not own your
+build tool. The two commands go here, in a comment, rather than in a build file:
+
+```sh
+# once
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
+
+# every time the .proto changes
+buf lint
+buf generate
+```
+
 ## The database
 
 **Run the migration Job before the rollout, not beside it.** A go-boot service refuses to start

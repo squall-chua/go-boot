@@ -1,0 +1,12 @@
+# buf drives the code generation for go-boot's OWN gRPC tests only. go-boot
+# never runs codegen for a user and never imports generated code: the user's
+# generated package is passed in as a value. See docs/spec.md 4.4.
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE
