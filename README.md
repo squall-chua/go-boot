@@ -13,9 +13,9 @@ it outright.
 
 Early. What works today is HTTP routes served by a real listener, started and stopped in Tier
 order, with a clean shutdown on SIGTERM; config from a file and the environment; the default
-middleware set with the response helpers below; the Actuator; and the database Starter, with a
-real PostgreSQL for tests. The rest of the v1 surface — gRPC, tracing and the Presets — is being
-built ticket by ticket against `docs/spec.md`.
+middleware set with the response helpers below; the Actuator; the database Starter, with a
+real PostgreSQL for tests; the gRPC Transport; and tracing. The rest of the v1 surface — the
+Presets — is being built ticket by ticket against `docs/spec.md`.
 
 ## Install
 
@@ -256,6 +256,86 @@ go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
 buf lint
 buf generate
 ```
+
+## Tracing
+
+Tracing is a Starter of its own, `goboot/trace`, and you get none of it unless you import it. That
+split is measured on the real thing, not estimated. The same HTTP service is **3 modules and
+6,807,817 bytes** stripped without tracing and **26 modules and 16,498,953 bytes** with it: the
+OTLP stack is **+9.69 MB**, the heaviest dependency in the project. Inside the Actuator, every
+Actuator user would have paid it.
+
+```yaml
+trace:
+  endpoint: "http://otel-collector:4317"  # empty means OTEL_EXPORTER_OTLP_ENDPOINT
+  serviceName: "orders"                   # empty means OTEL_SERVICE_NAME
+  sampleRatio: 0.1                        # zero means OTEL_TRACES_SAMPLER, which keeps everything
+```
+
+Every key is optional, and an empty key hands the choice back to the standard `OTEL_*` environment
+variables, which is the interface an operator already knows. Note that `sampleRatio: 0` does **not**
+mean "keep nothing" — it means "not set". To keep almost nothing, write `0.0001`.
+
+`trace.New(cfg, app.Log)` returns a `TierObserve` Component. It starts first and stops last, and
+`Stop` flushes: the batch processor holds spans in memory, and a process that exits without the
+flush loses the last batch, which is the batch you were chasing.
+
+### Use `trace.DefaultMiddleware`, not a second `Use` call
+
+```go
+srv.Use(trace.DefaultMiddleware(app.Log)...)
+```
+
+One word different from `web.DefaultMiddleware`, and it has to be one call rather than two.
+`Use` **appends**, so the line anyone would write instead —
+
+```go
+srv.Use(web.DefaultMiddleware(app.Log)...)
+srv.Use(trace.Middleware())               // wrong: this lands INNERMOST
+```
+
+— puts the span inside `Logging`, where the access-log line cannot carry the trace ID, because
+`Logging` read the request context before the span existed. The spans still export, so nothing
+looks broken; the log lines just never join up with them. The order that works is `RequestID`,
+trace, `Logging`, `Recovery`, and `trace.DefaultMiddleware` returns exactly that. A test pins both
+halves.
+
+The slice has five entries, not four. The fifth is `trace.RouteSpanName` and it is **innermost**,
+because that is the only place it works: `ServeMux` fills `r.Pattern` on the request handed to it,
+and every middleware that calls `r.WithContext` — `web.Logging` does — passes down a copy, so
+anything further out reads an empty pattern. Without it a span is named `GET`; with it, it is
+`GET /hello/{name}`. The path is never used as a name: one span name per customer ID is a
+cardinality bill, not a trace.
+
+The access-log line carries `traceId` and `spanId` because `trace.DefaultMiddleware` hands
+`web.Logging` a logger wrapped by `trace.WithIDs`. Both that and `trace.IsRPC` are exported so the
+slice stays one you can rebuild by hand, not hidden behaviour.
+
+### RPCs get one span, and no metrics
+
+`goboot/trace/rpc` holds the connect instrumentation, opt-in by import the same way:
+
+```go
+opts, err := rpc.Options()
+if err != nil {
+	return err
+}
+srv.Handle(greetv1connect.NewGreetServiceHandler(svc, append(grpc.DefaultOptions(app.Log), opts...)...))
+```
+
+`goboot/trace` filters `otelhttp` for RPC requests whether or not you import this package. Mounted
+together without the filter they give **two nested spans per RPC** — a redundant HTTP parent
+wrapping the real one — and a test measures that rather than asserting it. The rule is exact, not a
+guess at the path: the content type starts with `application/grpc`, **or** a
+`Connect-Protocol-Version` header is present. That covers all four protocols connect speaks, and a
+service with no gRPC never sees either header.
+
+**v1 ships no RPC metrics**, and this is a known gap rather than an oversight. `otelconnect` can
+emit them, but into the OTel pipeline, where `/actuator/metrics` — which reads the Prometheus
+registry — cannot see them. go-boot runs two pipelines on purpose, Prometheus for metrics and OTel
+for traces, and half a metric surface visible only to whoever runs the collector is worse than
+none. So there is no RPC count and no RPC latency by procedure. Spans carry the duration and the
+status code, so the data is there per request; the aggregate is what is missing.
 
 ## The database
 

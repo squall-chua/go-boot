@@ -878,6 +878,48 @@ func IsRPC(r *http.Request) bool
 `Start` builds the provider from the standard `OTEL_*` environment variables; `Stop` flushes. About
 20 lines.
 
+> **Amended by [#30](https://github.com/squall-chua/go-boot/issues/30).** The signatures above were
+> written against a stub that imported no OTel, and building the real one added two exported names
+> and a fifth entry to the slice. Both were measured, not preferred.
+>
+> `DefaultMiddleware` returns **five** entries: `RequestID`, trace, `Logging`, `Recovery`,
+> `RouteSpanName`. The four-name order is unchanged and still the point. The fifth is what names
+> the span after the route, and it has to be innermost: `ServeMux` fills `r.Pattern` in place on
+> the request handed to it, and `web.Logging` calls `r.WithContext`, so everything above it —
+> including `otelhttp`'s own rename, which does exactly this — reads an empty pattern and leaves
+> the span named `GET`. Measured: drop the entry and `TestSpanNamesComeFromTheRouteTemplate` reads
+> `"GET"` instead of `"GET /hello/{name}"`.
+>
+> `WithIDs(log) *slog.Logger` is the second name. Nothing in `goboot/web` can read a span —
+> `goboot/web` links no third-party module and that is load-bearing — so the trace ID reaches the
+> access-log line through the logger `DefaultMiddleware` hands to `web.Logging`: a `slog.Handler`
+> wrapper that copies the trace and span IDs off the context. Both names are exported for the
+> reason `IsRPC` is: the slice is one you can rebuild by hand.
+>
+> `RouteSpanName` names in a **`defer`**, which is not a detail. `web.Recovery` sits outside it, so
+> a panicking handler unwinds past a plain post-call rename and the 500's span keeps the name
+> `GET` — the one span anybody is chasing, worst named. Measured: `TestAPanickingHandlerStillGetsItsRouteName`.
+>
+> `Start` also sets the W3C propagator, which the sketch did not mention. Without it the spans are
+> real but every service starts a new trace, which is the failure that looks like success. It is the
+> one thing here NOT left to the environment: `OTEL_PROPAGATORS` is a specification variable
+> `opentelemetry-go` does not read, so there is nothing to defer to without importing contrib's
+> `autoprop` and the four vendor formats behind it.
+>
+> `Config.SampleRatio` zero means **not set**, not "keep nothing", and `New` returns an error for a
+> ratio outside 0..1 — which is the job the spec's `error` return had none of otherwise.
+>
+> `goboot/trace/rpc` exports `Options() ([]connect.HandlerOption, error)`, appending to
+> `grpc.DefaultOptions`, with `otelconnect.WithoutMetrics()` set. Measured module counts:
+> `goboot/trace` 26 modules, `goboot/trace/rpc` 11, and neither `goboot`, `goboot/web`,
+> `goboot/actuator`, `goboot/db` nor `goboot/grpc` links any of them.
+>
+> **The weight this Starter exists for, now measured on the real code rather than the stub.** One
+> HTTP service, `go build -ldflags="-s -w"`, counting linked non-stdlib module roots: **3 modules
+> and 6,807,817 bytes** without tracing, **26 modules and 16,498,953 bytes** with it. That is
+> **+9.69 MB and +23 modules**, and it confirms #10's prototype figure of +9.4 MB and 19 indirect
+> modules rather than revising it.
+
 **`trace.DefaultMiddleware` exists because `Use` cannot express the order.** `Use` appends, so the
 call anyone would write —
 
@@ -1173,8 +1215,10 @@ Stripped, `go build -ldflags="-s -w"`, counting linked non-stdlib module roots.
 | `cmd/full` | 21 | 14,405,897 |
 
 **Caveat when quoting these:** `prototypes/goboot/trace` is signature-only and imports no OTel. The
-numbers above measure call-site shape, which is real. The +9.4 MB and 19 modules that put tracing in
-its own Starter are **#10's** measurement, not the prototype's.
+numbers above measure call-site shape, which is real. The weight that puts tracing in its own
+Starter was **#10's** measurement, not the prototype's, and
+[#30](https://github.com/squall-chua/go-boot/issues/30) has since measured the real Starter at
+**+9.69 MB and +23 modules**. See [4.6](#46-goboottrace).
 
 ---
 
@@ -1191,7 +1235,9 @@ pinning.
 | `connectrpc.com/connect` | v1.20.0 | grpc | [#5](https://github.com/squall-chua/go-boot/issues/5) | proven by experiment: a real `grpc-go` client reached it over cleartext with no proxy, and one port served Connect JSON and gRPC-Web too. CNCF sandbox. grpc-gateway's in-process mode is unary-only and kills interceptors; Vanguard is still alpha after three years |
 | `google.golang.org/protobuf` | v1.36.11 | grpc, actuator (indirect) | [#5](https://github.com/squall-chua/go-boot/issues/5) | comes with connect. gRPC costs exactly these two modules and +3.57 MB. **Amended by [#28](https://github.com/squall-chua/go-boot/issues/28):** direct, not indirect — go-boot's own gRPC tests mount a generated service, and the generated code under `internal/gen` imports protobuf by name. Nothing a user links changes |
 | `github.com/pressly/goose/v3` | v3.27.3 | db | [#6](https://github.com/squall-chua/go-boot/issues/6) | driven through `NewProvider` in-process. ⚠️ **goose does not lock unless told to** — `lock.NewPostgresSessionLocker()` is wired on by default. Atlas ruled out twice (its library never locks, and the real revision store is behind a paid binary); golang-migrate blocks uncancellably and carries the dirty flag |
-| `go.opentelemetry.io/otel` and its SDK | v1.45.0 | trace | [#7](https://github.com/squall-chua/go-boot/issues/7), [#10](https://github.com/squall-chua/go-boot/issues/10) | traces only. **+9.4 MB stripped and 19 indirect modules**, which is why it is a separate Starter |
+| `go.opentelemetry.io/otel` and its SDK | v1.45.0 | trace | [#7](https://github.com/squall-chua/go-boot/issues/7), [#10](https://github.com/squall-chua/go-boot/issues/10) | traces only. **Amended by [#30](https://github.com/squall-chua/go-boot/issues/30):** measured on the real Starter rather than the stub, it is **+9.69 MB stripped and +23 modules**, which is why it is a separate Starter. #10's estimate was +9.4 MB and 19 indirect modules |
+| `.../exporters/otlp/otlptrace/otlptracegrpc` | v1.45.0 | trace | [#7](https://github.com/squall-chua/go-boot/issues/7) | the OTLP/gRPC exporter, reading `OTEL_EXPORTER_OTLP_ENDPOINT` with no options. #7 measured OTLP/gRPC and OTLP/HTTP as a 0.15 MB wash and chose gRPC for fit; the swap is one line. **Added by [#30](https://github.com/squall-chua/go-boot/issues/30):** the row was missing, though #7 always named it |
+| `google.golang.org/grpc` | v1.83.0 | trace (indirect) | [#7](https://github.com/squall-chua/go-boot/issues/7), [#30](https://github.com/squall-chua/go-boot/issues/30) | **Nobody chose this one; it arrives.** `go.opentelemetry.io/proto/otlp` pulls grpc-go in whichever OTLP protocol you pick, which is why #7 found the two exporters weigh the same. It is a dependency of the trace Starter only — the gRPC Transport still writes `connectrpc.com/connect` and nothing else (ADR `0005`), and a service that does not trace links no grpc-go |
 | `.../contrib/instrumentation/net/http/otelhttp` | v0.70.0 | trace | [#7](https://github.com/squall-chua/go-boot/issues/7) | HTTP spans, span name from `r.Pattern` |
 | `connectrpc.com/grpchealth` | v1.5.0 | `goboot/grpc/health` | [#29](https://github.com/squall-chua/go-boot/issues/29) | the health proto and its handler, wire compatible with `grpc-health-probe`. Writing it in-house would mean generating `health.proto` here. **One extra linked module**: it needs only connect and protobuf, which `goboot/grpc` already has |
 | `connectrpc.com/grpcreflect` | v1.3.0 | `goboot/grpc/reflection` | [#29](https://github.com/squall-chua/go-boot/issues/29) | the reflection protos, both v1 and v1alpha, and the static reflector. **One extra linked module**, same reason |
