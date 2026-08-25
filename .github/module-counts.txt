@@ -1,12 +1,13 @@
-goboot 2
-goboot/actuator 11
-goboot/db 7
-goboot/db/dbtest 15
-goboot/grpc 4
-goboot/grpc/health 5
-goboot/grpc/reflection 3
-goboot/preset 16
-goboot/preset/traced 36
-goboot/trace 25
-goboot/trace/rpc 10
-goboot/web 2
+# package / modules a user links (4) / modules its tests link (5)
+goboot                    2   2
+goboot/actuator          11  11
+goboot/db                 7  24
+goboot/db/dbtest         15  15
+goboot/grpc               4   4
+goboot/grpc/health        5  13
+goboot/grpc/reflection    3   5
+goboot/preset            16  16
+goboot/preset/traced     36  36
+goboot/trace             25  25
+goboot/trace/rpc         10  27
+goboot/web                2   2

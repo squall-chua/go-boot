@@ -1304,9 +1304,12 @@ only true if a check keeps it true.
 
 ### 8.1 The import-leak check
 
-Four assertions, settled in [#14](https://github.com/squall-chua/go-boot/issues/14). Prototyped as
+**Five assertions.** The first four were settled in
+[#14](https://github.com/squall-chua/go-boot/issues/14) and prototyped as
 `prototypes/scripts/check-imports.sh`, all four passing, **and verified to fail**: importing
-`goboot/trace` from `goboot/preset` makes assertion 2 report the leak and the script exit 1.
+`goboot/trace` from `goboot/preset` makes assertion 2 report the leak and the script exit 1. The
+fifth was added by [#33](https://github.com/squall-chua/go-boot/issues/33), and is listed with them
+below.
 
 1. **The base package and its *tests* import no Starter.** `go list -deps` alone misses test
    imports, so `.TestImports` and `.XTestImports` must be asked for explicitly. This is #3's hard
@@ -1321,6 +1324,12 @@ Four assertions, settled in [#14](https://github.com/squall-chua/go-boot/issues/
    silently. This is the one that catches the next leak nobody predicted. It could not be shown
    firing in the prototype, because the trace stub adds no modules; in the real repo that leak moves
    `goboot/preset` from 15 modules to roughly 34.
+5. **A pinned count of the modules a package's *tests* link**, in the same golden file, one row per
+   package, regenerated deliberately and never silently. `go list -deps` excludes tests by design,
+   so assertion 4 counts what a **user** links and goes on counting exactly that. But `go mod tidy`
+   walks test imports, so a heavy dependency added to a test lands in every consumer's module graph
+   even though it reaches no consumer's binary — #3's hard rule, arriving through a door the four
+   assertions above do not name.
 
 The check must cover **every package a short path imports, not just `goboot`** — the rule as first
 written missed `goboot/preset`, whose Preset dragged the Actuator into an HTTP-only binary: 10
@@ -1350,6 +1359,36 @@ modules and 12.4 MB against 1 module and 9.2 MB.
 > `trace/trace_test.go`'s `TestABuildWithNoTracingLinksNoTracing` is the tracing third of assertion
 > 2 and goes further than the script — it covers the examples, and asserts `goboot/trace` does not
 > link `otelconnect`, which is a rule about a heavy package rather than about a short path.
+
+> **Assertion 5 was added by [#33](https://github.com/squall-chua/go-boot/issues/33).** The gap was
+> found while building #32 and left alone there, because quietly making four assertions five is not
+> a build decision. Measured on `main` at `95b5156`, `go list -deps ./db` reports 7 modules and
+> `go list -deps -test ./db` reports 24: seventeen modules that no user links, and that nothing
+> checked.
+>
+> **The rule is a count, not a list of allowed modules.** An allowlist would name 32 module paths
+> today, nearly all of them transitive ones nobody chose, and it would churn on every upstream
+> version bump. A count is the same shape assertion 4 already proved, and it reuses the one golden
+> file, the one `--update` path and the one diff.
+>
+> **Both numbers share `.github/module-counts.txt`**, as `<package> <user links> <tests link>`, with
+> a header line naming the columns. The two are compared column by column, so the report says which
+> assertion moved rather than leaving the reader to guess. Four rows carry a second number today:
+> `goboot/db` 7 → 24, `goboot/trace/rpc` 10 → 27, `goboot/grpc/health` 5 → 13 and
+> `goboot/grpc/reflection` 3 → 5. The other eight packages pull nothing extra in their tests.
+>
+> **Proven to fail**, the way the other four were: a `goboot/web` test importing
+> `prometheus/client_golang` moves that row from `2 2` to `2 11` and fails 5 **and nothing else**.
+> The same import in non-test code fails 4 and 5 together, which is the column split doing its job
+> in both directions. Editing the header line fails 4 and 5 together as well, because the header is
+> the only thing telling a reader which column is which. Both injections and their output are
+> recorded on #33.
+>
+> **One door is left open, on purpose.** Assertion 5 inherits assertion 4's exclusion of `examples`
+> and `internal`, so a heavy dependency added to an **example's** test still reaches every
+> consumer's module graph unchecked. Those binaries import the heavy packages by design, so their
+> counts move whenever an example is edited, and a number that moves for ordinary work pins
+> nothing. Named here so nobody has to rediscover it.
 
 ### 8.2 CI builds both forms of every Preset
 

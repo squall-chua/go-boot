@@ -33,9 +33,9 @@ jobs:
         run: go build ./...
 
       - name: the import-leak check
-        # docs/spec.md 8.1, all four assertions. Each one was proven to fail
+        # docs/spec.md 8.1, all five assertions. Each one was proven to fail
         # against a real injected violation before it was trusted to pass;
-        # the injections and their output are recorded on #32.
+        # the injections and their output are recorded on #32 and #33.
         run: .github/check-imports.sh
 
       - name: vet

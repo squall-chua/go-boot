@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# The import-leak check: docs/spec.md 8.1, four assertions settled in #14,
-# built for real by #32.
+# The import-leak check: docs/spec.md 8.1, five assertions. Four were settled
+# in #14 and built for real by #32; the fifth was added by #33.
 #
 # Go links by import. A package that names a heavy dependency makes every
-# importer pay for it, so these four rules are what keep the
+# importer pay for it, so these five rules are what keep the
 # optional-subpackage convention in CONTEXT.md honest. Reading the imports by
 # eye cannot keep them true; only asking the toolchain on every push can.
 #
@@ -19,7 +19,7 @@
 #     otelconnect, which is a rule about a heavy package rather than about a
 #     short path.
 #
-# Run with --update to rewrite the golden module counts of assertion 4.
+# Run with --update to rewrite the golden module counts of assertions 4 and 5.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -45,14 +45,17 @@ report() {
 
 deps() { go list -deps -f '{{.ImportPath}}' "$1"; }
 
-# Linked non-stdlib module roots, not counting go-boot itself. Stdlib
+# mods <package> [extra go list flags]: linked non-stdlib module roots, not
+# counting go-boot itself. `-test` is the extra flag assertion 5 passes, and
+# it is the only difference between the two numbers in the golden file. Stdlib
 # packages carry no .Module, so the template drops them. go list runs on a
 # line of its own: inside a pipeline, `pipefail` plus the `|| true` that grep
 # needs for the no-match case would let a toolchain failure read as a package
 # with no dependencies at all.
 mods() {
-	local all
-	all=$(go list -deps -f '{{if .Module}}{{.Module.Path}}{{end}}' "$1")
+	local pkg=$1 all
+	shift
+	all=$(go list -deps "$@" -f '{{if .Module}}{{.Module.Path}}{{end}}' "$pkg")
 	printf '%s\n' "$all" | sort -u | grep -vxF "$M" || true
 }
 
@@ -99,32 +102,80 @@ reaches "$M/preset/traced" $(printf '%s\n' $heavy | grep -vxF "$M/trace")
 drv=$(deps "$M/db" | grep -E 'jackc|go-sql-driver|lib/pq|mattn/go-sqlite3' | sort -u || true)
 report "3. goboot/db links no driver" "$drv"
 
-# 4. A pinned module count per package. This is the one that catches the NEXT
+# 4. A pinned module count per package, and 5. a pinned count of the modules
+#    that package's TESTS link. Assertion 4 is the one that catches the NEXT
 #    leak, the one nobody predicted, and the one no hand-written rule above
-#    names. The package list comes from `go list`, so a new package is a
-#    golden-file change too.
+#    names.
+#
+#    Assertion 5 is the same idea aimed at the door 8.1 did not name. `go list
+#    -deps` excludes tests by design, so a heavy dependency added to a test
+#    passes all four rules above — assertion 1 greps only for go-boot import
+#    paths, and assertion 4 counts what a user links. But `go mod tidy` walks
+#    test imports, so a test-only dependency still lands in every consumer's
+#    module graph. It is a real cost, so it gets a real number.
+#
+#    Both numbers live in one golden file, one row per package, and the header
+#    line names each column so they are never read as the same thing.
+#    Assertion 4 goes on counting exactly what it always counted.
 #
 #    Two directories are left out. `examples` holds binaries, and their weight
 #    is measured in docs/spec.md 6 rather than pinned here. `internal` is
 #    generated protobuf code that no user can import, so its module count is a
 #    fact about buf's output, not about what go-boot links — but base reaching
 #    it is still caught, by assertion 1 above.
+
+#    Assertion 5 inherits that exclusion, and there it leaves a real hole: `go
+#    mod tidy` walks the tests under `examples` too, so a heavy dependency
+#    added to an example's test still reaches every consumer's module graph
+#    unchecked. It is left open on purpose. Those binaries import the heavy
+#    packages by design, so their counts move whenever an example is edited,
+#    and a number that moves for ordinary work pins nothing.
 counts=$(mktemp)
 trap 'rm -f "$counts"' EXIT
 pkgs=$(go list ./...)
-for p in $(printf '%s\n' "$pkgs" | grep -vE "^$M/(examples|internal)/"); do
-	printf '%s %s\n' "goboot${p#"$M"}" "$(mods "$p" | wc -l)"
-done > "$counts"
+{
+	echo '# package / modules a user links (4) / modules its tests link (5)'
+	for p in $(printf '%s\n' "$pkgs" | grep -vE "^$M/(examples|internal)/"); do
+		printf '%-23s %3d %3d\n' "goboot${p#"$M"}" \
+			"$(mods "$p" | wc -l)" "$(mods "$p" -test | wc -l)"
+	done
+} > "$counts"
+
+# col <n> <file>: the package name and column n, so one assertion's numbers
+# can be compared without the other's.
+col() { awk -v c="$1" '/^#/ { next } { print $1, $c }' "$2"; }
+
+# pinned <column> <assertion number> <what the column counts>
+pinned() {
+	if diff -q <(col "$1" "$golden") <(col "$1" "$counts") > /dev/null; then
+		say ok "$2. $3 pinned"
+	else
+		say FAIL "$2. $3 moved. Read the diff above. If the change is"
+		say "" "   wanted, run .github/check-imports.sh --update and commit it."
+		fail=1
+	fi
+}
 
 if [ "$update" = 1 ]; then
 	cp "$counts" "$golden"
-	say ok "4. module counts written to $golden"
-elif ! diff -u "$golden" "$counts"; then
-	say FAIL "4. module counts moved. Read the diff above. If the change is"
-	say "" "   wanted, run .github/check-imports.sh --update and commit it."
-	fail=1
+	say ok "4, 5. module counts written to $golden"
+elif diff -u "$golden" "$counts"; then
+	say ok "4. the modules a user links pinned"
+	say ok "5. the modules the tests link pinned"
 else
-	say ok "4. module counts pinned"
+	# The file moved, and the diff above is already printed. Say WHICH column
+	# moved, so the two numbers are never read as one.
+	before=$fail
+	pinned 2 4 "the modules a user links"
+	pinned 3 5 "the modules the tests link"
+	# Neither column moved, so what moved is the header line or the spacing.
+	# That is still a golden-file change, and the header is the only thing
+	# telling a reader which column is which, so it fails too.
+	if [ "$fail" = "$before" ]; then
+		say FAIL "4, 5. the golden file's header or spacing moved. Read the"
+		say "" "   diff above, then run .github/check-imports.sh --update."
+		fail=1
+	fi
 fi
 
 exit $fail
