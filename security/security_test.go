@@ -557,6 +557,75 @@ func TestPreflightIsNotAuthenticated(t *testing.T) {
 	}
 }
 
+// The aud claim is legally a string OR an array of strings, and an issuer
+// with a misconfigured mapper emits an empty array. All three shapes are
+// pinned, because docs/spec.md 4.7 makes audience a REQUIRED key and the
+// whole value of that rule is what it rejects.
+func TestTheAudienceClaimInEveryShape(t *testing.T) {
+	i := newIssuer(t)
+	s := serve(t, jwtOnly(i), mountBoth)
+
+	t.Run("an array containing the audience is accepted", func(t *testing.T) {
+		c := i.claims()
+		c["aud"] = []string{"billing-api", audience, "other"}
+		if resp, body := get(t, s, "/orders", i.sign(c)); resp.StatusCode != http.StatusOK {
+			t.Fatalf("got %d %s, want 200", resp.StatusCode, body)
+		}
+	})
+	t.Run("no aud claim at all is refused", func(t *testing.T) {
+		c := i.claims()
+		delete(c, "aud")
+		if resp, _ := get(t, s, "/open", i.sign(c)); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("got %d, want 401", resp.StatusCode)
+		}
+	})
+	t.Run("an empty aud array is refused", func(t *testing.T) {
+		c := i.claims()
+		c["aud"] = []string{}
+		if resp, _ := get(t, s, "/open", i.sign(c)); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("got %d, want 401", resp.StatusCode)
+		}
+	})
+}
+
+// TestWhatAnIssuerOutageCosts is the price of making JWKS the only key
+// source, measured rather than argued. Lazy fetch means the key set is not a
+// startup dependency — but it IS a first-token dependency, and that is the
+// half worth writing a test for so nobody has to rediscover it.
+func TestWhatAnIssuerOutageCosts(t *testing.T) {
+	t.Run("a cold start with the issuer down rejects every token", func(t *testing.T) {
+		i := newIssuer(t)
+		tok := i.sign(i.claims())
+		s := serve(t, jwtOnly(i), mountBoth)
+		i.srv.Close() // down before the first token ever arrives
+		if resp, _ := get(t, s, "/orders", tok); resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("got %d, want 401", resp.StatusCode)
+		}
+	})
+	t.Run("a warm cache survives the issuer going down", func(t *testing.T) {
+		i := newIssuer(t)
+		s := serve(t, jwtOnly(i), mountBoth)
+		tok := i.sign(i.claims())
+		if resp, _ := get(t, s, "/orders", tok); resp.StatusCode != http.StatusOK {
+			t.Fatalf("warm-up failed: %d", resp.StatusCode)
+		}
+		i.srv.Close()
+		// A kid already in the cache is answered from it before any refetch
+		// is considered, so a steady-state outage costs nothing.
+		if resp, _ := get(t, s, "/orders", tok); resp.StatusCode != http.StatusOK {
+			t.Fatalf("a cached key stopped working when the issuer went down: %d", resp.StatusCode)
+		}
+	})
+	t.Run("an open route is unaffected either way", func(t *testing.T) {
+		i := newIssuer(t)
+		s := serve(t, jwtOnly(i), mountBoth)
+		i.srv.Close()
+		if resp, _ := get(t, s, "/open", ""); resp.StatusCode != http.StatusOK {
+			t.Fatalf("got %d, want 200", resp.StatusCode)
+		}
+	})
+}
+
 // TestTheConstructorRejectsABadConfig is 4.0's rule: misconfiguration comes
 // back from the constructor, never from a 401 in production.
 func TestTheConstructorRejectsABadConfig(t *testing.T) {
