@@ -19,6 +19,7 @@
 package brokertest
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
@@ -86,13 +87,29 @@ func runPublished(tb testing.TB, containerPort int, args func(hostPort int) []st
 			"run", "--detach", "--rm",
 			"--publish", fmt.Sprintf("%d:%d", hostPort, containerPort),
 		}, args(hostPort)...)
-		out, err := exec.Command("docker", full...).CombinedOutput()
+		// Stdout and stderr kept apart, and NOT CombinedOutput. `docker run`
+		// writes pull progress to stderr, so on a machine that does not have
+		// the image yet — every CI runner, on the first run — combining them
+		// buries the container id under a screenful of layer progress. The
+		// id then fails every later `docker exec` with the daemon's
+		// unhelpful "page not found", which is what this cost the first time
+		// it reached CI.
+		var stdout, stderr bytes.Buffer
+		cmd := exec.Command("docker", full...)
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
 		if err == nil {
-			id = strings.TrimSpace(string(out))
+			id = strings.TrimSpace(stdout.String())
+			// A container id is 64 hex characters. Checking says so here,
+			// rather than three commands later somewhere that cannot explain
+			// itself.
+			if len(id) != 64 {
+				tb.Fatalf("brokertest: docker run gave %d bytes where a container id belongs: %q", len(id), id)
+			}
 			tb.Cleanup(func() { _ = exec.Command("docker", "kill", id).Run() })
 			return id, hostPort
 		}
-		last = strings.TrimSpace(string(out))
+		last = strings.TrimSpace(stderr.String())
 		if !strings.Contains(last, "address already in use") &&
 			!strings.Contains(last, "port is already allocated") {
 			tb.Fatalf("brokertest: docker run: %v: %s", err, last)
