@@ -158,8 +158,11 @@ what a Preset wires, so the copy ships as compiling code and one test drives bot
 ### Where to go next
 
 Everything below is reference, read as you need it: the default middleware, the Actuator, gRPC,
-tracing, the database and the Preset. Those sections quote fragments and single lines rather than
-whole wiring, so they are not part of the checked path above.
+tracing, the database and the Preset. Most of those sections quote fragments and single lines
+rather than whole wiring, and a fragment has no file it can be lifted from whole, so it is not
+checked. Where a block *is* a whole excerpt it carries a `<!-- from: ... -->` comment, and CI
+checks it against that file exactly as it does on the path above. The marker is the whole rule:
+marked is checked, unmarked is not.
 
 ## The default middleware
 
@@ -198,6 +201,7 @@ srv.Use(append(web.DefaultMiddleware(app.Log), metrics.Middleware)...)
 If you trace, append to the other default set instead — `trace.DefaultMiddleware` is five entries
 and a second `Use` call cannot reorder what the first added:
 
+<!-- from: examples/full/explicit.go -->
 ```go
 srv.Use(append(trace.DefaultMiddleware(app.Log), metrics.Middleware)...)
 ```
@@ -296,6 +300,7 @@ connect-go's generated constructor returns `(string, http.Handler)`, which is ex
 `web.Server.Handle`, so a connect service mounts on the HTTP listener with no adapter and no second
 port:
 
+<!-- from: examples/full/explicit.go -->
 ```go
 srv.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
 ```
@@ -321,6 +326,7 @@ at all — only that it cannot choose between two `Greet` methods.
 A separate thin type — the gRPC Transport, in this repo's language — is the way out, and it is
 four lines:
 
+<!-- from: examples/full/service.go -->
 ```go
 type grpcGreeter struct{ svc *greeter }
 
@@ -496,6 +502,7 @@ flush loses the last batch, which is the batch you were chasing.
 
 ### Use `trace.DefaultMiddleware`, not a second `Use` call
 
+<!-- from: preset/traced/traced.go -->
 ```go
 srv.Use(trace.DefaultMiddleware(app.Log)...)
 ```
@@ -684,6 +691,7 @@ serve the same service.
 Preset that loaded config for you would break on the first one. Your struct embeds the Preset's
 config inline and adds its own keys beside it:
 
+<!-- from: examples/full/main.go -->
 ```go
 type config struct {
 	traced.Config `yaml:",inline"`

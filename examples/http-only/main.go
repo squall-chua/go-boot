@@ -1,5 +1,5 @@
 // Command http-only is the smallest useful go-boot service: one Transport,
-// the default middleware, and nothing else. Eight wiring lines.
+// the default middleware, and nothing else.
 //
 // There is no Preset for this shape. One was written and deleted, because it
 // came out LONGER than the body it replaced. The short path is short because

@@ -1,6 +1,5 @@
 // Command http-actuator-config is the realistic default: one Transport, an
-// Actuator, and the service's own config key alongside go-boot's. Fourteen
-// wiring lines.
+// Actuator, and the service's own config key alongside go-boot's.
 //
 // There is no Preset for this shape either. act.MountOn(srv) is the one line
 // that decides where the operational endpoints live, and it is the same line

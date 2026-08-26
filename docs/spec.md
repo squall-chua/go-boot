@@ -2203,9 +2203,17 @@ running service**, above every reference section, so a newcomer meets it before 
 
 | Stop | What it adds | Where the reader ends up running |
 |---|---|---|
-| 1. The smallest service | one Transport and the default middleware, eight wiring lines | `go run ./examples/http-only`, then `curl localhost:8080/hello/world` |
-| 2. The Actuator and config | the operational endpoints and the service's own config key, fourteen wiring lines | `go run ./examples/http-actuator-config`, then `curl localhost:8080/readyz` and `/actuator/metrics` |
+| 1. The smallest service | one Transport and the default middleware | `go run ./examples/http-only`, then `curl localhost:8080/hello/world` |
+| 2. The Actuator and config | the operational endpoints and the service's own config key | `go run ./examples/http-actuator-config`, then `curl localhost:8080/readyz` and `/actuator/metrics` |
 | 3. The whole surface | HTTP, gRPC, database and tracing, wired by one call to a Preset | `go run ./examples/full`, and `go run ./examples/full explicit` for the same service wired by hand |
+
+> **Amended by [#48](https://github.com/squall-chua/go-boot/issues/48).** Stops 1 and 2 carried
+> "eight wiring lines" and "fourteen wiring lines". Under the one counting rule that reproduces
+> `http-only` at 8, stop 2 is **13**, not 14 — the same mismatch that had already made
+> [#31](https://github.com/squall-chua/go-boot/issues/31) delete the wiring-line table from
+> [5](#5-the-presets-and-what-each-wires) rather than correct it. Deleted here for the same
+> reason, and removed from the two example doc comments still repeating them. A number no rule
+> reproduces is exactly the unverifiable prose this section keeps off the path.
 
 The three stops are the three example directories [#19](https://github.com/squall-chua/go-boot/issues/19)
 already scoped, in the order [6. The `main.go` a developer writes](#6-the-maingo-a-developer-writes)
@@ -2258,13 +2266,47 @@ the one gap on the path, and it is named here rather than left for a reader to n
 ### What is not on the path, and why that is right
 
 Everything below **Where to go next** in `README.md` is reference: the default middleware, the
-Actuator, gRPC, tracing, the database and the Preset. Those sections quote single lines and
-fragments to make a point, and a fragment has no file it can be lifted from whole.
+Actuator, gRPC, tracing, the database and the Preset. Most of those sections quote single lines and
+fragments to make a point, and **a fragment has no file it can be lifted from whole**. Those carry
+no marker and no guarantee. Marking a fragment would mean reshaping the prose around what the
+checker can verify, which is the wrong way round.
 
-They carry no marker and no guarantee, and `README.md` **says so out loud** rather than leaving the
-reader to work out which code is checked. Marking a fragment would mean reshaping the prose around
-what the checker can verify, which is the wrong way round. The path gets the guarantee because the
-path is what a newcomer copies.
+> **Amended by [#48](https://github.com/squall-chua/go-boot/issues/48).** This section used to say
+> the reference blocks carry no marker at all. Five of them are lifted whole out of code CI
+> compiles, so that sentence was giving up rot protection which cost one line each to have.
+
+**A reference block that can be lifted whole must carry a marker.** Not *may*: **must**. The path
+still gets the guarantee because the path is what a newcomer copies, but a block that already
+qualifies is free to check, and declining to check it buys the reader nothing. `docs_test.go`
+checks a marked block wherever it sits, so this needed no new checking of blocks — only a rule
+saying which blocks have to be marked.
+
+**And the rule is enforced, because a hand-marked block is only a habit.** The path can demand a
+marker *by position*: every Go block between its heading and the next one needs one. The reference
+sections cannot be checked that way, because their fragments legitimately have no marker. So the
+demand is made the other way round — `TestVerbatimBlocksAreMarked` finds every Go block in
+`README.md` that is byte for byte inside a file in this module, and fails unless it carries a
+marker. This is the same rule-not-habit argument that
+[the second half of the path check](#every-sample-on-the-path-is-compiled) rests on, applied where
+position cannot reach.
+
+**Being inside the file is not enough; it has to be inside the code.** #48 opened by listing seven
+blocks as already verbatim. Two of them — the `metrics.Middleware` line and the `pgx/v5/stdlib`
+blank import — sit in `web/metrics/metrics.go` and `db/db.go` only inside a **doc comment**, and
+nothing in this module compiles them: they are lines the *reader* writes, not lines go-boot runs.
+Marking those two would have synced one piece of prose to another, so renaming the symbol they both
+name would break neither and the marker would promise what it cannot keep. **They stay unmarked**,
+and the check knows the difference: it masks out every comment first, and asks whether the match
+lands on a byte the compiler actually reads. A block that merely *carries* a comment still counts,
+because the code around it is compiled.
+
+**`prototypes/` does not count.** It is a separate Go module and CI does not build it, so a marker
+naming a file in there would promise a guarantee that nothing keeps. The check walks this module
+only, in lexical order, so a block sitting in more than one file always names the same one.
+
+**So the marker is the whole rule, and `README.md` says it out loud**: a marked block is checked
+and an unmarked one is not. The reader tells them apart by looking, rather than by knowing where
+the path ended.
 
 ### The other three documents
 
