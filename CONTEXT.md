@@ -55,13 +55,8 @@ _Avoid_: environment (collides with environment variables), stage, mode
 **Transport**:
 A protocol front end that exposes the Service Layer to callers. go-boot v1 has two: HTTP
 and gRPC. They are independent — neither is generated from the other — but they share one
-listener.
-
-**A Consumer is not a Transport, though it starts at the same Tier.** `goboot/kafka` and
-`goboot/rabbit` declare `TierTransport`, because the lifecycle reason is the same — start last,
-stop first, so nothing takes new work while the pool it needs is going away. But a Transport is
-**called**, and a Consumer **calls out**: it fetches its own work from a broker, exposes no port
-and shares no listener. That is why the Tier above lists message consumers and this term does not.
+listener. A **Consumer** is not a Transport, though it starts at the same Tier — see the
+next entry.
 _Avoid_: door, adapter, endpoint, protocol
 
 **Consumer**:
@@ -70,6 +65,13 @@ partition or per queue. It is `TierTransport` and it is the named user of the op
 on Drain it stops taking new messages and returns at once, and the waiting for work in flight
 happens in Stop, which is the only phase with a budget. Delivery is at-least-once, so a Handler
 must be idempotent.
+
+**It is not a Transport, and the Tier is the only thing they share.** `goboot/kafka` and
+`goboot/rabbit` declare `TierTransport` because the lifecycle reason is the same — start last,
+stop first, so nothing takes new work while the pool it needs is going away. But a Transport is
+**called**, and a Consumer **calls out**: it fetches its own work from a broker, exposes no port
+and shares no listener. That is why the Tier above lists message consumers and the Transport
+entry does not.
 _Avoid_: listener (collides with the HTTP listener), subscriber, worker, Transport
 
 **Service Layer**:
