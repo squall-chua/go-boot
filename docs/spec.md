@@ -2974,24 +2974,31 @@ specifying one surfaces a hole in that interface that nothing has stood in yet.
 `a.Stop(context.WithoutCancel(ctx))`, and `App.drain` passes that context straight to every
 `Drainer`. So the context a consumer's `Drain` receives has no deadline and can never be cancelled.
 `Drainer.Drain` also returns nothing, and the Drainers run one after another in start order, so a
-`Drain` that blocks blocks the whole shutdown with nothing able to interrupt it.
+`Drain` that blocks blocks the whole shutdown, with neither the drain delay nor `stopTimeout` able
+to cut it short — both come later. Only a second signal escapes, and that is the operator's doing.
 
 **This has never mattered, because go-boot ships exactly one `Drainer`.** Grep the repository: the
 only `Drain` outside tests and `prototypes/` is `actuator/actuator.go`, and its whole body is
-`a.draining.Store(true)`. `goboot/web` and `goboot/grpc` do not implement `Drainer` at all — they
-let go of connections in `Stop`, through `http.Server.Shutdown`, which has `stopTimeout` behind it.
+`a.draining.Store(true)`. `goboot/web` implements no `Drainer` and lets go of connections in `Stop`,
+through `http.Server.Shutdown`, which has `stopTimeout` behind it. `goboot/grpc` is not a Component
+at all — [4.4](#44-gobootgrpc--the-grpc-transport-starter) has it own no server and mount on the
+HTTP Starter's listener, so it has no `Stop` either.
 So a consumer is not merely the first Drainer outside the Transports, as
 [11](#11-deferred-past-v1) put it. It is the **first `Drain` in go-boot with anything to do**, and
 the interface has no budget to do it in.
 
-> **This outlived the ticket that found it.** The hole is in the base package, not in messaging, so
-> it is [#49](https://github.com/squall-chua/go-boot/issues/49), and it is a `v1` question rather
-> than a post-v1 one: `Drainer` is public surface under
-> [12](#12-versioning-and-release-policy), so giving it a budget or an error return is much harder
-> after the tag than before. `Drainer`'s doc comment in `goboot.go` now states the constraint,
-> which is the cheap guard; #49 decides whether that is the whole answer. Nothing in this section
-> depends on the outcome — the consumers below are designed to the constraint as it stands, and
-> they stay correct if #49 loosens it.
+> **This outlived the ticket that found it, and is now settled.** The hole is in the base package,
+> not in messaging, so it became [#49](https://github.com/squall-chua/go-boot/issues/49), which
+> chose to document the constraint rather than change the interface.
+> [2](#2-the-component-lifecycle-contract) carries the decision and the reasoning, and
+> `TestRunGivesDrainNoBudgetAndStopOne` pins it.
+>
+> One correction that section makes, because this one leaned on it: only an **error return** is
+> harder after the tag. A `lifecycle.drainTimeout` is a config key whose default would preserve
+> today's behaviour, which [12](#12-versioning-and-release-policy) allows a minor release to add,
+> so that option stays open for the whole life of `v1`. Nothing below depends on which way it goes:
+> the consumers are designed to the constraint as it stands, and stay correct if it is ever
+> loosened.
 
 **So the consumer's `Drain` stops fetching and returns, and the waiting moves to `Stop`.** `Drain`
 tells the fetch loop to take no more messages, which is exactly what the interface's name promises
@@ -3037,8 +3044,8 @@ Nothing below is edited now. The packages do not exist, and
 builds this has the list rather than rediscovering it:
 
 - **[7](#7-dependencies-and-the-ticket-that-chose-each-one) gains two rows**, for
-  `github.com/twmb/franz-go` and `github.com/rabbitmq/amqp091-go`, each citing #35 in the Ticket column and carrying the
-  measured numbers from the table above. That section opens "go-boot links these and nothing else",
+  `github.com/twmb/franz-go` and `github.com/rabbitmq/amqp091-go`, each citing #35 in the Ticket
+  column and carrying the measured numbers from the table above. That section opens "go-boot links these and nothing else",
   so it is the one this design most directly invalidates, and re-measuring at the pinned versions is
   part of writing the rows — [7](#7-dependencies-and-the-ticket-that-chose-each-one) says to
   re-check the proxy before pinning.
