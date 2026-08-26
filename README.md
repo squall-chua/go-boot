@@ -87,6 +87,60 @@ entries, outermost first:
 the first two every ten seconds, which is roughly 17,000 log lines a day saying nothing. These three
 paths are hardcoded, not a config key.
 
+### Counting and timing HTTP requests
+
+A fourth middleware, from `goboot/web/metrics`, opt-in by import and deliberately **not** in the
+default set — nobody links Prometheus who did not ask for it. It answers "how many requests to
+`GET /orders/{id}` failed, and how slow are they" from the endpoint that already answers everything
+else. It is a separate package because `goboot/web` links **2 modules** — no package here links
+fewer — and every HTTP user imports it, so naming Prometheus there would charge all of them for a
+counter most never scrape:
+
+```go
+srv.Use(append(web.DefaultMiddleware(app.Log), metrics.Middleware)...)
+```
+
+If you trace, append to the other default set instead — `trace.DefaultMiddleware` is five entries
+and a second `Use` call cannot reorder what the first added:
+
+```go
+srv.Use(append(trace.DefaultMiddleware(app.Log), metrics.Middleware)...)
+```
+
+Two metrics, both labelled `route` and `status`, both registered on the Prometheus default registry,
+so both appear at `/actuator/metrics` once `metrics` is named in `actuator.expose`:
+
+| Metric                          | Type      | What it answers                       |
+| ------------------------------- | --------- | ------------------------------------- |
+| `http_requests_total`           | counter   | How many, and how many of them failed |
+| `http_request_duration_seconds` | histogram | How slow, at a quantile               |
+
+**`route` is `r.Pattern`, never the path.** `GET /orders/1` and `GET /orders/2` are two requests on
+the one series `GET /orders/{id}`. A metric labelled by path is an unbounded label set and a
+Prometheus outage. A request that matched no pattern gets an empty `route`, so a scanner walking
+`/wp-admin` and `/.env` lands on one series rather than inventing one each. There is no `method`
+label: the route already carries the method, and on an unrouted request the method is the one thing
+a caller could still make up.
+
+**A panicking handler counts as `500`.** `Use` appends, so this middleware lands inside `Recovery`
+and a panic would otherwise unwind straight past the counter. It records in a `defer`, so it is
+right whether you append it or splice it in ahead of `Recovery`. If the handler had already written
+part of a response before it panicked, the label is the status the client actually got, not 500 —
+`Recovery` cannot take a sent status line back, so a 500 there would disagree with the access log
+for the same request. `http.ErrAbortHandler` is passed through uncounted, the same as everywhere
+else.
+
+**Probe paths ARE counted**, unlike the access log. The log skips them because 17,000 lines a day is
+volume; a metric has no volume, a probe is one more series. Exclude them in PromQL if you do not
+want them — nothing recovers a measurement that was never taken, and `/readyz` latency is the time
+your readiness Checks take. Two things follow: the scrape of `/actuator/metrics` counts itself, and
+setting `actuator.addr` moves the Actuator to its own listener that this middleware never wraps, so
+there the probe endpoints are not counted at all.
+
+**No Preset wires it.** A Preset takes no options, and `goboot/preset` is forbidden from reaching
+this package by the import-leak check, so the line above goes in `main`. A Preset user who wants
+these metrics copies the body of `Full`.
+
 Errors on the wire are RFC 7807 documents from `web.WriteProblem`, so a panic and a hand-written
 400 come out in the same shape. `web.DecodeJSON` reads a request body with the size cap, unknown
 field rejection and readable errors that `json.NewDecoder(r.Body).Decode` leaves to you.

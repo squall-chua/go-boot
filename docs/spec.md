@@ -299,7 +299,7 @@ that HTTP and gRPC got one answer rather than two that disagree. This is the sec
 #### There is no go-boot error type, and no go-boot sentinel
 
 A Starter returns a plain `error`, built with `errors.New` or `fmt.Errorf`. There is no
-`goboot.Error`, no `goboot.ErrConfig`, and no exported sentinel in any of the thirteen packages.
+`goboot.Error`, no `goboot.ErrConfig`, and no exported sentinel in any of the fourteen packages.
 
 A caller who needs to branch matches on the sentinel belonging to whoever produced the fault —
 `sql.ErrNoRows`, `fs.ErrNotExist`, `http.MaxBytesError` — with `errors.Is` or `errors.As`. It never
@@ -331,7 +331,7 @@ The key path is the one that matters, because it is the only locator that tells 
 line of which YAML file to edit. `actuator.expose: no endpoint named "metric"` was already written
 this way and is the model the rest were brought to.
 
-There is no bare message with no locator in the twelve packages a service links. The thirteenth,
+There is no bare message with no locator in the thirteen packages a service links. The fourteenth,
 `goboot/db/dbtest`, is exempt and is the only one: every one of its exports takes a `testing.TB`
 and calls `Fatal` on it, so none of its text ever reaches a `main` — its messages name the check
 that failed rather than a config key, and that is right for a test helper.
@@ -355,7 +355,7 @@ below: go-boot is the handler here, and it wrote those words.
 **A constructor validates its own config and returns `(T, error)`. `Start` reports only what needs
 the world.**
 
-All thirteen public packages are below, so the rule can be checked rather than believed. Every one
+All fourteen public packages are below, so the rule can be checked rather than believed. Every one
 that has config to validate follows it; the rest are listed with the reason they have nothing to
 validate, because "not applicable" and "overlooked" look identical in a shorter table:
 
@@ -364,6 +364,7 @@ validate, because "not applicable" and "overlooked" look identical in a shorter 
 | `goboot` | a `log.level` that is not a level | a Component that failed to start or died |
 | `goboot/actuator` | an `actuator.expose` entry naming no endpoint | binding the private listener |
 | `goboot/web` | half a `web.tls` pair | binding the listener |
+| `goboot/web/metrics` | nothing: no config, no Component, no constructor at all. `metrics.Middleware` IS the middleware and registers at package init, so there is nothing to fail | — |
 | `goboot/db` | a `db.driver` with no goose dialect, and `sql.Open` | reaching the database, pending migrations |
 | `goboot/trace` | a `trace.sampleRatio` outside 0..1 | building the exporter |
 | `goboot/preset`, `goboot/preset/traced` | nothing of their own — they return the first error the constructors above give them | — |
@@ -642,10 +643,12 @@ OTel pipeline, visible only to whoever runs a collector. The other route to one 
 metric SDK and its exporter as modules, and it makes RPC metrics conditional on tracing being
 imported *and* enabled, so a service that wants a counter and no collector cannot have one.
 
-**HTTP metrics are still missing, and now have nothing left to decide.** `/actuator/metrics`
-carries no count and no latency by route. That is
-[#45](https://github.com/squall-chua/go-boot/issues/45), and the rule above is what it spends: the
-pipeline question is answered, so the work is typing.
+**HTTP metrics spend that rule, and are now shipped.** `/actuator/metrics` carries a count and a
+latency **by route** from `goboot/web/metrics` ([4.3](#43-gobootweb--the-http-transport-starter)),
+registered on the same default registry and served by the same endpoint.
+[#45](https://github.com/squall-chua/go-boot/issues/45) had nothing left to decide about the
+pipeline, which is the point of writing the rule down once: what it had left to settle was where
+the middleware goes and how to keep the route label bounded.
 
 **No metric go-boot ships is registered from a package a user links by default.** `goboot/actuator`
 serves the registry, it does not fill it. Anything that registers is an opt-in subpackage, which is
@@ -811,6 +814,112 @@ because gRPC streams share this server.
 **Not in v1**: CORS (the dangerous mistake — `*` with credentials — is the easy one to make; point
 at `rs/cors`) and security headers (on a JSON API `X-Frame-Options: DENY` does nothing, and half a
 header set now means changing it when the Security Starter arrives).
+
+#### `goboot/web/metrics`
+
+Opt-in by import, the same shape [`goboot/grpc/metrics`](#gobootgrpcmetrics) has. Settled by
+[#45](https://github.com/squall-chua/go-boot/issues/45). Under the pipeline rule in
+[4.2](#42-gobootactuator): the metrics are registered on `prometheus.DefaultRegisterer`, so they
+are served by `/actuator/metrics` and by nothing else.
+
+**It is a subpackage because `goboot/web` links 2 modules** — as few as the base package itself,
+and no package in the repo links fewer — and it is the one package every HTTP user imports. Naming `client_golang` there would charge all of them for
+Prometheus to get a counter most never scrape — the leak assertion 2 of
+[8.1](#81-the-import-leak-check) exists to catch. Measured: `goboot/web/metrics` links **9
+modules**, `goboot/web` stays at **2**, and `go.mod` gains nothing, because `client_golang` is the
+dependency the Actuator has linked since #7.
+
+And measured again from the other side, which is the number that matters: **every one of those 9
+modules is one `goboot/actuator` already links**, so for a service that exposes
+`/actuator/metrics` — the only service that can see these metrics at all — this package costs
+**zero** extra modules. The subpackage is not buying weight back from its own user; it is keeping
+the Prometheus dependency off the HTTP user who never asked for it.
+
+```go
+package metrics
+
+// Middleware counts and times one request. It is a web.Middleware, and it
+// needs no constructor: it holds no logger and has no options to build.
+func Middleware(next http.Handler) http.Handler
+```
+
+```go
+srv.Use(append(web.DefaultMiddleware(app.Log), metrics.Middleware)...)
+```
+
+**A traced service appends to the other default set**, for the reason
+[4.6](#46-goboottrace) already gives — `trace.DefaultMiddleware` is five entries, not `web`'s three,
+and a second `Use` call cannot reorder what the first one added:
+
+```go
+srv.Use(append(trace.DefaultMiddleware(app.Log), metrics.Middleware)...)
+```
+
+Two metrics, both labelled `route` and `status`:
+
+| Metric                          | Type      | What it answers                       |
+| ------------------------------- | --------- | ------------------------------------- |
+| `http_requests_total`           | counter   | How many, and how many of them failed |
+| `http_request_duration_seconds` | histogram | How slow, at a quantile               |
+
+**`route` is `r.Pattern`, never `r.URL.Path`.** Patterns are registered at startup so the set is
+fixed at compile time; paths are whatever a caller sends. This is the same line `Logging` draws
+above — *path is what was asked for, route is the low-cardinality label to group by* — except that
+getting it wrong here costs a Prometheus outage rather than a wide log line.
+`TestAPathWithAnIdInItDoesNotCreateANewLabelValue` pins it, and fails if the label is switched to
+the path.
+
+**A request that routed nowhere carries an empty `route`.** Measured on Go 1.26.3: `http.ServeMux`
+leaves `r.Pattern` empty for both a 404 and a 405, so every scan of `/wp-admin`, `/.env` and the
+rest lands on one series rather than inventing one each.
+
+**There is deliberately no `method` label.** `r.Pattern` already carries the method for a
+method-bound pattern — the route label reads `GET /users/{id}` — and on the one path where it does
+not, the unrouted request above, the method is an arbitrary token the caller chose. It would be the
+only unbounded label left, and it would be unbounded exactly where the scanner traffic is.
+
+**It records in a `defer`, so it is correct wherever the user puts it.** `Use` appends, so the line
+above lands this middleware **inside** `Recovery`, and a panic unwinds past anything written after
+`next()` — the same lesson `goboot/grpc/metrics` learned, and a test fails without the `defer`. A
+recovered panic is labelled with **the status the caller actually got**, and is then re-panicked so
+`Recovery` still logs it and still writes what it writes. Spliced *outside* `Recovery` instead, no
+panic reaches this middleware and the recorder already holds the same answer.
+`TestItRecordsWhereverItLandsInTheSlice` pins both placements.
+
+**A panic after a partial write keeps the status already on the wire**, and that is the same
+condition `Recovery` itself branches on: a response that has been written cannot be taken back, so
+`Recovery` logs the panic and writes no 500, and the client keeps the 200 it was already sent. A
+metric that called that request a 500 would be the only place in go-boot claiming a status nobody
+received — it would disagree with the access line for the same `requestId`. So `500` is the label
+only when nothing had been written yet, which is exactly when `Recovery` writes one.
+`TestAPanicAfterAPartialWriteKeepsTheStatusTheClientGot` pins it.
+
+**`http.ErrAbortHandler` is passed through uncounted**, because every other layer already treats it
+as a deliberate abort rather than a failure: `web.Recovery` re-panics it rather than writing a 500,
+`Logging` writes no access line for it at all, and `goboot/grpc/metrics` does not count it either.
+
+**Probe paths ARE counted, and this is the one place the answer differs from `Logging`.** The log
+skips `/livez`, `/readyz` and `/actuator/*` because of **volume** — roughly 17,000 lines a day
+saying nothing. A metric has no volume: a probe adds one series, not 17,000 of anything. An
+operator who does not want probes in a graph excludes them in PromQL, and nothing recovers a
+measurement that was never taken, so the latency of `/readyz` — which runs every readiness Check on
+each request — stays available. `TestProbePathsAreCounted` pins it, so the difference is a decision
+rather than an oversight.
+
+Two consequences of that to read as choices rather than discover. **The scrape counts itself**: on
+the shared port `/actuator/metrics` is an ordinary route, so `http_requests_total{route="GET
+/actuator/metrics"}` climbs once per scrape. And **`actuator.addr` turns all of this off for the
+Actuator's endpoints**: that key moves them to a private listener the Actuator binds and owns
+([4.2](#42-gobootactuator)), which this middleware never wraps, so on that shape `/livez`,
+`/readyz` and `/actuator/*` are not counted at all and the `/readyz` latency argument above does
+not apply. Neither is a defect of the middleware — both follow from where it is mounted — but a
+dashboard built on the shared port and moved to a private one loses those series.
+
+**No Preset wires it**, and that is forced twice over: a Preset takes no options, and assertion 2
+of [8.1](#81-the-import-leak-check) forbids `goboot/preset` from reaching this package at all, or
+every Preset user pays for Prometheus to get a counter they did not ask for. So the one line above
+goes in `main`. A Preset user who wants these metrics copies the body of `Full`, which is the
+documented escape hatch of [5](#5-the-presets-and-what-each-wires) and not a fallback.
 
 ### 4.4 `goboot/grpc` — the gRPC Transport Starter
 
@@ -1638,11 +1747,15 @@ below.
 2. **No short-path package reaches a heavy optional package.** The short paths are `goboot`,
    `goboot/web`, `goboot/db`, `goboot/actuator`, `goboot/grpc` and `goboot/preset`. The heavy
    optional packages are `goboot/trace`, `goboot/grpc/health`, `goboot/grpc/metrics`,
-   `goboot/grpc/reflection`, `goboot/trace/rpc` and `goboot/db/dbtest`. `goboot/grpc/metrics` was
-   added by [#41](https://github.com/squall-chua/go-boot/issues/41), and it is the rule doing its
-   plainest job: the package registers on the Prometheus default registry, so listing it is what
-   stops `goboot/grpc` growing the dependency [9](#9-known-gaps-in-v1) says an HTTP-only user must
-   not pay.
+   `goboot/grpc/reflection`, `goboot/trace/rpc`, `goboot/db/dbtest` and `goboot/web/metrics`.
+   `goboot/grpc/metrics` was added by [#41](https://github.com/squall-chua/go-boot/issues/41), and
+   it is the rule doing its plainest job: the package registers on the Prometheus default registry,
+   so listing it is what stops `goboot/grpc` growing the dependency
+   [9](#9-known-gaps-in-v1) says an HTTP-only user must not pay. `goboot/web/metrics` was added by
+   [#45](https://github.com/squall-chua/go-boot/issues/45) for the same reason on the HTTP side, and
+   it is the entry that does the second job named in [4.3](#43-gobootweb--the-http-transport-starter):
+   it is what makes "no Preset wires it" a rule the toolchain checks rather than a promise in prose,
+   because `goboot/preset` is a short path and so may never reach it.
 3. **`goboot/db` links no driver.** Grep the dependency list for `jackc`, `go-sql-driver`, `lib/pq`
    and `mattn/go-sqlite3`.
 4. **A pinned module count per package**, in a golden file, regenerated deliberately and never
@@ -1670,8 +1783,10 @@ modules and 12.4 MB against 1 module and 9.2 MB.
 > other three cannot. The four injections and their output are recorded on #32.
 >
 > **A seventh package joins assertion 2.** `goboot/preset/traced` is not a short path, but it is the
-> one package allowed to reach `goboot/trace`, so it is checked against the other four heavy
-> packages. Without that it is the obvious place for the next heavy dependency to hide: a twin that
+> one package allowed to reach `goboot/trace`, so it is checked against the other six heavy
+> packages. (The count is written out here, so it moves whenever the list does: it read "four" until
+> [#45](https://github.com/squall-chua/go-boot/issues/45), which is one behind what #41 had already
+> left — the script reads the list rather than the number, so only this sentence was ever wrong.) Without that it is the obvious place for the next heavy dependency to hide: a twin that
 > may reach one heavy package reads, to the next person, as a twin the rule does not apply to.
 >
 > **Two numbers moved.** The prediction above was that the trace leak takes `goboot/preset` from 15
@@ -1844,7 +1959,7 @@ policy: follow it and a tag can be cut with nothing left to decide.
 ### One tag covers every Starter
 
 go-boot is **one Go module** ([1. Ground rules](#1-ground-rules)), so there is **one tag**, and it
-covers all thirteen packages at once. A fix in `goboot/db` bumps the version number a root-only user
+covers all fourteen packages at once. A fix in `goboot/db` bumps the version number a root-only user
 sees, even though nothing they import changed. That is the price of the one-module layout, and
 [#3](https://github.com/squall-chua/go-boot/issues/3) measured it as small: a root-only consumer
 downloads 1 zip and 2.9 KB, so the upgrade they did not need is an upgrade they barely pay for.
@@ -1853,13 +1968,14 @@ The reverse also holds, and it is the part to say out loud: **a user cannot pin 
 older version than another.** There is one version number for the whole library. Anyone who needs
 otherwise is asking for the multi-module layout #3 refused.
 
-### The public surface is these thirteen packages
+### The public surface is these fourteen packages
 
-`goboot`, `goboot/actuator`, `goboot/web`, `goboot/grpc`, `goboot/grpc/health`,
-`goboot/grpc/metrics`, `goboot/grpc/reflection`, `goboot/db`, `goboot/db/dbtest`, `goboot/trace`,
-`goboot/trace/rpc`, `goboot/preset` and `goboot/preset/traced`. Every exported identifier in them
-is covered by the promise below. `goboot/db/dbtest` is on the list and not an afterthought:
-go-boot's own tests use it, so it is shipped code a user may reasonably build on.
+`goboot`, `goboot/actuator`, `goboot/web`, `goboot/web/metrics`, `goboot/grpc`,
+`goboot/grpc/health`, `goboot/grpc/metrics`, `goboot/grpc/reflection`, `goboot/db`,
+`goboot/db/dbtest`, `goboot/trace`, `goboot/trace/rpc`, `goboot/preset` and `goboot/preset/traced`.
+Every exported identifier in them is covered by the promise below. `goboot/db/dbtest` is on the
+list and not an afterthought: go-boot's own tests use it, so it is shipped code a user may
+reasonably build on.
 
 Three things in the repository are **not** surface, and each is excluded by a mechanism rather than
 by a sentence, so it cannot drift. `internal/` is excluded by the Go compiler. `examples/` are
@@ -1873,10 +1989,11 @@ dashboard breaks on a renamed JSON field exactly as a compile breaks on a rename
 A new package cannot appear unnoticed: `.github/check-imports.sh` reads the package list from
 `go list ./...` and pins one row per package in `.github/module-counts.txt`, regenerated only by
 `--update`, so **a new package fails CI until someone updates the golden file**
-([8.1](#81-the-import-leak-check)). Nothing ties that file to the thirteen names written above,
+([8.1](#81-the-import-leak-check)). Nothing ties that file to the fourteen names written above,
 though, so **whoever updates it updates this list in the same commit.** #41 is the first change to
 test that rule, and it held: `goboot/grpc/metrics` went into the list and the golden file
-together.
+together. [#45](https://github.com/squall-chua/go-boot/issues/45) is the second, and it held the
+same way: `goboot/web/metrics` and the row `goboot/web/metrics 9 11`, one commit.
 
 ### The line before v1 is `v0.x`
 
@@ -1894,7 +2011,7 @@ it ends as soon as that reason does.
 
 Once `v1.0.0` is cut, for the whole life of `v1`:
 
-- **No exported identifier in the thirteen packages is removed or renamed, and no function or method
+- **No exported identifier in the fourteen packages is removed or renamed, and no function or method
   signature changes.**
 - **No config key is removed or renamed, and no default value changes.** `maxOpenConns` is still
   `10` on the last `v1` release. A silently improved default moves a production knob its owner
@@ -1946,7 +2063,7 @@ code. A `v1` minor release can carry any of them.
 Exactly one item was ever able to change the surface of an existing Starter: the error-handling
 convention ([#38](https://github.com/squall-chua/go-boot/issues/38)). It decided what every Starter
 returns on misconfiguration and whether a go-boot error type exists at all — a signature question
-across all thirteen packages. Freezing the surface before it landed would have frozen it wrong, and
+across all fourteen packages. Freezing the surface before it landed would have frozen it wrong, and
 the only way out of that is a `v2` on a library that has barely shipped.
 
 So the gate was one sentence, and it was checkable rather than a judgement call:

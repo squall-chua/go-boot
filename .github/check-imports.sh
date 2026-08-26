@@ -74,7 +74,7 @@ report "1. the base package and its tests import no go-boot subpackage" "$bad"
 # 2. No short-path package reaches a heavy optional package. The rule as
 #    first written listed only `goboot`, and missed goboot/preset, whose
 #    Preset dragged the Actuator into an HTTP-only binary.
-heavy="$M/trace $M/grpc/health $M/grpc/metrics $M/grpc/reflection $M/trace/rpc $M/db/dbtest"
+heavy="$M/trace $M/grpc/health $M/grpc/metrics $M/grpc/reflection $M/trace/rpc $M/db/dbtest $M/web/metrics"
 leaked=0
 reaches() { # <package> <packages it must not reach>...
 	local p=$1 d h

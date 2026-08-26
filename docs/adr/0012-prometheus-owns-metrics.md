@@ -86,11 +86,12 @@ a single counter. The rule is `docs/spec.md` §4.2; the package it produced is `
   rather than writing a 500, and `web.Logging` writes no access line for it at all — it logs after
   the call, not in a `defer`. Counting it would have made this the one place in go-boot that calls
   a dropped connection a server error.
-- **HTTP metrics are not in this change, and now have nothing left to decide.** `/actuator/metrics`
-  still carries no count or latency by route. That is
-  [#45](https://github.com/squall-chua/go-boot/issues/45): the pipeline question is already
-  answered and `goboot/grpc/metrics` is the shape to copy, so what is left is where the middleware
-  goes and keeping the route label bounded.
+- **HTTP metrics were not in this change, and had nothing left to decide.**
+  [#45](https://github.com/squall-chua/go-boot/issues/45) has since spent this rule and shipped
+  `goboot/web/metrics`. It re-opened nothing here — same registry, same endpoint, same
+  opt-in-subpackage shape — which is what writing the rule down once was for; the questions it did
+  have to settle were all local to the middleware, and are recorded in `docs/spec.md` §4.3 rather
+  than restated here.
 - **A future Starter has no decision to make.** If it emits a metric, the metric goes on the
   Prometheus default registry, and if it needs a dependency to do so, it goes in a subpackage the
   user imports. That is the point of writing it down once.
