@@ -855,6 +855,12 @@ and a second `Use` call cannot reorder what the first one added:
 srv.Use(append(trace.DefaultMiddleware(app.Log), metrics.Middleware)...)
 ```
 
+**Both lines are compiled, not printed only here.** The plain one is built by
+`web/metrics/metrics_test.go`; the traced one is built by `examples/full/explicit.go`, which
+[#46](https://github.com/squall-chua/go-boot/issues/46) wired for that reason. A snippet nothing
+builds rots, and this one has a trap in it — copying the plain line into a traced service silently
+drops tracing — so the compiler holds it, not a reviewer's eye.
+
 Two metrics, both labelled `route` and `status`:
 
 | Metric                          | Type      | What it answers                       |
@@ -920,6 +926,8 @@ of [8.1](#81-the-import-leak-check) forbids `goboot/preset` from reaching this p
 every Preset user pays for Prometheus to get a counter they did not ask for. So the one line above
 goes in `main`. A Preset user who wants these metrics copies the body of `Full`, which is the
 documented escape hatch of [5](#5-the-presets-and-what-each-wires) and not a fallback.
+`examples/full` is that worked example: the explicit form wires this package and the Preset form
+cannot, and the difference between the two files is what copying the body buys.
 
 ### 4.4 `goboot/grpc` — the gRPC Transport Starter
 
@@ -1569,6 +1577,11 @@ HTTP, gRPC, database, Actuator and tracing. The Preset form is shorter, and #31 
 that used to be quoted here — see [5. The Presets](#5-the-presets-and-what-each-wires). Both forms
 live in the same directory, CI builds both, and one test drives both.
 
+**The two forms are not identical, and that is the point.** The explicit form wires
+`goboot/web/metrics` ([4.3](#43-gobootweb--the-http-transport-starter)) and the Preset form does
+not, because assertion 2 of [8.1](#81-the-import-leak-check) forbids `goboot/preset` from reaching
+that package. That one line is what copying the body buys, and it is the only difference.
+
 Preset form:
 
 ```go
@@ -1601,7 +1614,7 @@ func run(ctx context.Context) error {
 }
 ```
 
-Explicit form — exactly what `traced.Full` expands to:
+Explicit form — what `traced.Full` expands to, plus the one line no Preset can wire:
 
 ```go
 func runExplicit(ctx context.Context) error {
@@ -1629,7 +1642,10 @@ func runExplicit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	srv.Use(trace.DefaultMiddleware(app.Log)...) // five entries; see 4.6
+	// Five entries, not web's three; see 4.6. metrics.Middleware is the line
+	// no Preset can wire, because assertion 2 of 8.1 keeps goboot/preset off
+	// that package. See 4.3.
+	srv.Use(append(trace.DefaultMiddleware(app.Log), metrics.Middleware)...)
 	act.MountOn(srv)
 	app.Add(act, tracer, database, srv)
 
@@ -1667,7 +1683,23 @@ go-boot itself.
 |---|---:|---:|---:|
 | `examples/http-only` | 2 | 6,807,817 | 6.49 MB |
 | `examples/http-actuator-config` | 11 | 11,628,809 | 11.09 MB |
-| `examples/full` | 41 | 22,831,369 | 21.77 MB |
+| `examples/full` | 41 | 22,896,905 | 21.84 MB |
+
+> **Re-measured by [#46](https://github.com/squall-chua/go-boot/issues/46).** The `examples/full`
+> row moved for two reasons at once, and the release note should name both, because the row is one
+> number.
+>
+> - **+61,440 bytes, and no modules**, for wiring `goboot/web/metrics` onto `trace.DefaultMiddleware`
+>   in `examples/full/explicit.go`, so that the traced line
+>   [4.3](#43-gobootweb--the-http-transport-starter) and `README.md` print is compiled by CI rather
+>   than checked by eye. 22,835,465 became 22,896,905. The module count stays at **41** because
+>   every module that package links is one the Actuator already links, and
+>   `.github/module-counts.txt` does not move at all, since it excludes `examples`.
+> - **+4,096 bytes that are older than this change.** The pinned 22,831,369 already measured
+>   22,835,465 on Go 1.26.3 before a line was touched, so the row was stale by one page. This
+>   re-measure closes that too.
+>
+> The two lighter rows are unchanged, to the byte.
 
 > **Re-measured by [#31](https://github.com/squall-chua/go-boot/issues/31).** These were the
 > prototype's: 1 module and 6,414,601 bytes, 10 and 9,363,721, 21 and 14,405,897. They came with a

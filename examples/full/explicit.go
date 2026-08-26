@@ -1,13 +1,19 @@
 package main
 
-// EXPLICIT FORM: exactly what traced.Full(cfg.Config, migrations()) expands
-// to, written out in main. This file IS the copy-the-body escape hatch, and
-// CI compiles it and a test drives it.
+// EXPLICIT FORM: what traced.Full(cfg.Config, migrations()) expands to,
+// written out in main, plus the one line no Preset can wire. This file IS the
+// copy-the-body escape hatch, and CI compiles it and a test drives it.
 //
 // Copying costs you the upgrade path, and that is the whole trade. A fix
 // go-boot makes to the wiring above reaches a Preset user through
 // `go get -u`; it never reaches these lines. Copy when you must reorder or
 // remove something, knowing you have chosen to own the wiring.
+//
+// What it buys is the goboot/web/metrics line below. Assertion 2 of
+// .github/check-imports.sh forbids goboot/preset from reaching that package,
+// so traced.Full cannot wire it and no edit to traced.Full ever will. The
+// difference between the two forms in this directory is the whole answer to
+// "what does copying the body get me".
 
 import (
 	"context"
@@ -19,6 +25,7 @@ import (
 	"github.com/squall-chua/go-boot/internal/gen/greet/v1/greetv1connect"
 	"github.com/squall-chua/go-boot/trace"
 	"github.com/squall-chua/go-boot/web"
+	"github.com/squall-chua/go-boot/web/metrics"
 )
 
 func runExplicit(ctx context.Context) error {
@@ -46,9 +53,14 @@ func runExplicit(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	srv.Use(trace.DefaultMiddleware(app.Log)...) // five entries, not web's three; see goboot/trace
-	act.MountOn(srv)                             // forget this and there is no /readyz
-	app.Add(act, tracer, database, srv)          // the order here is ignored; Tier decides
+	// trace.DefaultMiddleware is five entries, not web's three; see
+	// goboot/trace. Append to it rather than calling Use a second time: Use
+	// appends, so a second call cannot reorder what the first one added, and
+	// a traced service that copies the plain web.DefaultMiddleware line from
+	// docs/spec.md 4.3 silently drops tracing. This is that line, compiled.
+	srv.Use(append(trace.DefaultMiddleware(app.Log), metrics.Middleware)...)
+	act.MountOn(srv)                    // forget this and there is no /readyz
+	app.Add(act, tracer, database, srv) // the order here is ignored; Tier decides
 
 	svc := &greeter{db: pool, greeting: cfg.Greeting}
 	srv.Handle("GET /hello/{name}", httpGreet(svc))
