@@ -307,6 +307,64 @@ func TestDrainDelayIsWaited(t *testing.T) {
 	}
 }
 
+// ctxStub records the context each shutdown phase is handed, so a test can
+// assert what Run promises about them.
+type ctxStub struct {
+	*stub
+	drainCtx, stopCtx context.Context
+}
+
+func (c *ctxStub) Drain(ctx context.Context) { c.drainCtx = ctx }
+
+func (c *ctxStub) Stop(ctx context.Context) error { c.stopCtx = ctx; return c.stub.Stop(ctx) }
+
+// TestRunGivesDrainNoBudgetAndStopOne pins what Drainer's doc comment says,
+// so the comment cannot quietly become false. Under Run, Drain's context has
+// no deadline and can never be cancelled, because Run calls Stop with
+// context.WithoutCancel and drain passes it on untouched. That is why a Drain
+// must return promptly and waiting belongs in Stop, whose context does carry
+// StopTimeout. Settled by #49.
+func TestRunGivesDrainNoBudgetAndStopOne(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	c := &ctxStub{stub: &stub{name: "only", tier: TierTransport}}
+	app := newApp(t, LifecycleConfig{DrainDelay: time.Nanosecond, StopTimeout: time.Minute})
+	app.Add(c)
+
+	// Shut down by cancelling Run's own context, which is the same path a
+	// signal takes without needing to send one. The deadline is a ceiling, not
+	// a wait: cancelling regardless lets Run return and the assertions below
+	// name the failure, rather than the whole binary timing out.
+	go func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for !app.Ready() && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+	}()
+	if err := app.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if c.drainCtx == nil || c.stopCtx == nil {
+		t.Fatal("Drain or Stop never ran")
+	}
+	if deadline, ok := c.drainCtx.Deadline(); ok {
+		t.Errorf("Drain ctx has deadline %v; Drainer's doc comment promises none", deadline)
+	}
+	if c.drainCtx.Done() != nil {
+		t.Error("Drain ctx is cancellable; Run passes context.WithoutCancel, so it must not be")
+	}
+	if err := c.drainCtx.Err(); err != nil {
+		t.Errorf("Drain ctx is already cancelled: %v", err)
+	}
+	// The other half of the same promise: Stop is where a budget exists, so
+	// it is where a Component may wait for work in flight.
+	if _, ok := c.stopCtx.Deadline(); !ok {
+		t.Error("Stop ctx has no deadline; StopTimeout must reach it, or waiting has nowhere to go")
+	}
+}
+
 // TestStopTimeoutCoversTheWholeSequence pins that the stop timeout is one
 // budget for every Component together, and that a Component which overruns it
 // gets a cancelled context rather than being waited on forever.

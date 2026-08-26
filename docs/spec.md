@@ -120,7 +120,9 @@ type Component interface {
 	Stop(ctx context.Context) error
 }
 
-// Drainer is optional: stop taking new work. Runs in START order, before any Stop.
+// Drainer is optional: stop taking new work. Runs in START order, before any
+// Stop. Drain must return promptly: its ctx has no deadline and cannot be
+// cancelled, so waiting belongs in Stop. See below.
 type Drainer interface{ Drain(ctx context.Context) }
 
 // Checker is optional: the Actuator registers it under Name(). Nothing is
@@ -144,6 +146,44 @@ type Checker interface{ Check(ctx context.Context) error }
 **Drain runs in start order, not reverse.** Reverse order drains the Actuator last, so the 503
 lands after the Transports have already let go. Announce first, tear down last. The prototype had
 this backwards; it was a latent bug.
+
+**`Drain` has no budget, and `Drain` is not where waiting belongs.** Settled by
+[#49](https://github.com/squall-chua/go-boot/issues/49). `Run` calls `Stop` with
+`context.WithoutCancel`, and step 4 hands that context to every `Drainer` untouched — unlike step
+5, which wraps it in `StopTimeout`. So the context a `Drain` receives has **no deadline and can
+never be cancelled**, `Drain` returns no error, and the Drainers run one after another. A `Drain`
+that waits for work in flight therefore blocks the whole shutdown with nothing able to interrupt
+it. Neither the drain delay nor `StopTimeout` can cut it short, because both come later. **A second
+signal still kills the process**, because step 3 hands signal handling back to Go before any of
+this runs — that is the one escape, and it is the operator's, not go-boot's.
+
+So `Drain` means *stop taking new work*, and nothing else. A Component that must wait for work in
+flight waits in `Stop`, which has a real budget, and gives up when that budget expires. That is
+already how the fifteen packages behave: the Actuator is the only `Drainer` in the repository and
+its whole `Drain` is one flag store, `goboot/web` implements no `Drainer` and lets go of
+connections in `Stop` through `http.Server.Shutdown`, and `goboot/grpc` is not a Component at all
+([4.4](#44-gobootgrpc--the-grpc-transport-starter) — it owns no server and mounts on the HTTP
+Starter's listener). [14](#14-the-messaging-starter-specified-and-post-v1) designs the consumers to
+the same rule.
+
+> **Why the interface is not changed instead.** #49 weighed a `lifecycle.drainTimeout` and a
+> `Drain(ctx) error`. Neither bounds a `Drain` that ignores its context, because step 4 calls it
+> synchronously; both cost surface for a guarantee they do not deliver. A timeout key stays
+> available for the whole life of `v1` if a real service ever wants one —
+> [12](#12-versioning-and-release-policy) allows adding a config key whose default preserves
+> today's behaviour — so shipping nothing keeps the option open, which is the same argument
+> [4.0](#40-the-error-convention-every-starter-follows) used against a go-boot error sentinel. The
+> signature change is the one door the tag closes, and it is the option that buys least.
+>
+> A shutdown that genuinely cannot hang means running the Drainers concurrently and moving on when
+> a budget expires. That is a larger change than any of the three, it is not needed while every
+> `Drain` in the repository is a flag store, and it is not `v1`.
+
+`Drainer`'s doc comment carries this constraint, and `TestRunGivesDrainNoBudgetAndStopOne` pins it
+so the comment cannot quietly become false. **Proven to fail** the way
+[8.1](#81-the-import-leak-check)'s assertions were: giving step 4 a one-second timeout trips all
+three `Drain` assertions, and dropping `context.WithoutCancel` from `Run` trips the two about
+cancellation and **not** the one about the deadline.
 
 **A Component that cannot die after startup returns a nil channel.** A nil channel blocks forever,
 which is free and correct.
