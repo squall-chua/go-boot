@@ -299,7 +299,7 @@ that HTTP and gRPC got one answer rather than two that disagree. This is the sec
 #### There is no go-boot error type, and no go-boot sentinel
 
 A Starter returns a plain `error`, built with `errors.New` or `fmt.Errorf`. There is no
-`goboot.Error`, no `goboot.ErrConfig`, and no exported sentinel in any of the fourteen packages.
+`goboot.Error`, no `goboot.ErrConfig`, and no exported sentinel in any of the fifteen packages.
 
 A caller who needs to branch matches on the sentinel belonging to whoever produced the fault —
 `sql.ErrNoRows`, `fs.ErrNotExist`, `http.MaxBytesError` — with `errors.Is` or `errors.As`. It never
@@ -331,7 +331,7 @@ The key path is the one that matters, because it is the only locator that tells 
 line of which YAML file to edit. `actuator.expose: no endpoint named "metric"` was already written
 this way and is the model the rest were brought to.
 
-There is no bare message with no locator in the thirteen packages a service links. The fourteenth,
+There is no bare message with no locator in the fourteen packages a service links. The fifteenth,
 `goboot/db/dbtest`, is exempt and is the only one: every one of its exports takes a `testing.TB`
 and calls `Fatal` on it, so none of its text ever reaches a `main` — its messages name the check
 that failed rather than a config key, and that is right for a test helper.
@@ -355,7 +355,7 @@ below: go-boot is the handler here, and it wrote those words.
 **A constructor validates its own config and returns `(T, error)`. `Start` reports only what needs
 the world.**
 
-All fourteen public packages are below, so the rule can be checked rather than believed. Every one
+All fifteen public packages are below, so the rule can be checked rather than believed. Every one
 that has config to validate follows it; the rest are listed with the reason they have nothing to
 validate, because "not applicable" and "overlooked" look identical in a shorter table:
 
@@ -365,6 +365,7 @@ validate, because "not applicable" and "overlooked" look identical in a shorter 
 | `goboot/actuator` | an `actuator.expose` entry naming no endpoint | binding the private listener |
 | `goboot/web` | half a `web.tls` pair | binding the listener |
 | `goboot/web/metrics` | nothing: no config, no Component, no constructor at all. `metrics.Middleware` IS the middleware and registers at package init, so there is nothing to fail | — |
+| `goboot/security` | a `security.jwt` section missing `issuer`, `audience` or `jwksUrl`; a `jwksUrl` on plain `http` outside loopback; and `security.cors` allowing `*` with credentials, or setting `allowCredentials` with no origins | — no Component: the JWKS key set is fetched lazily, on the first token |
 | `goboot/db` | a `db.driver` with no goose dialect, and `sql.Open` | reaching the database, pending migrations |
 | `goboot/trace` | a `trace.sampleRatio` outside 0..1 | building the exporter |
 | `goboot/preset`, `goboot/preset/traced` | nothing of their own — they return the first error the constructors above give them | — |
@@ -814,6 +815,13 @@ because gRPC streams share this server.
 **Not in v1**: CORS (the dangerous mistake — `*` with credentials — is the easy one to make; point
 at `rs/cors`) and security headers (on a JSON API `X-Frame-Options: DENY` does nothing, and half a
 header set now means changing it when the Security Starter arrives).
+
+> **Both arrived, in [4.7](#47-gobootsecurity--the-security-starter)**
+> ([#34](https://github.com/squall-chua/go-boot/issues/34)), and the two sentences above are what
+> they were built to. The dangerous CORS pair is a **startup error** rather than a documentation
+> note, and the header set is whole rather than half — `X-Frame-Options` is still left out, for the
+> reason written here. Neither is in `goboot/web`: they are in a package a user opts into, so an
+> HTTP user who wants neither links neither.
 
 #### `goboot/web/metrics`
 
@@ -1390,6 +1398,258 @@ from the other side: RPC count and latency by procedure come from `goboot/grpc/m
 ([4.4](#44-gobootgrpc--the-grpc-transport-starter)), on the Prometheus registry, needing neither
 this package nor a collector. `WithoutMetrics()` stays.
 
+### 4.7 `goboot/security` — the Security Starter
+
+Settled in [#34](https://github.com/squall-chua/go-boot/issues/34). It owns the ground
+[4.3](#43-gobootweb--the-http-transport-starter) deliberately left empty, and it is where the two
+things [10](#10-what-go-boot-does-not-do) refused for v1 — CORS and security headers — come back,
+as something a user opts into rather than as a default every user links.
+
+```go
+package security
+
+type Config struct {
+	Headers HeadersConfig `yaml:"headers"`
+	CORS    CORSConfig    `yaml:"cors"`
+	JWT     JWTConfig     `yaml:"jwt"`
+}
+
+type HeadersConfig struct {
+	HSTSMaxAge time.Duration `yaml:"hstsMaxAge"` // 0, which is off
+}
+
+type CORSConfig struct {
+	AllowedOrigins   []string      `yaml:"allowedOrigins"`   // exact origins, or the single entry "*"
+	AllowedMethods   []string      `yaml:"allowedMethods"`   // GET, POST, PUT, PATCH, DELETE
+	AllowedHeaders   []string      `yaml:"allowedHeaders"`   // Authorization, Content-Type
+	AllowCredentials bool          `yaml:"allowCredentials"` // false
+	MaxAge           time.Duration `yaml:"maxAge"`           // 10m
+}
+
+type JWTConfig struct {
+	Issuer   string        `yaml:"issuer"`   // required
+	Audience string        `yaml:"audience"` // required
+	JWKSURL  string        `yaml:"jwksUrl"`  // required
+	Leeway   time.Duration `yaml:"leeway"`   // 30s
+}
+
+// Principal is what a verified token became. Claims holds the whole payload,
+// so a claim go-boot does not name is still reachable.
+type Principal struct {
+	Subject string
+	Issuer  string
+	Scopes  []string
+	Claims  map[string]any
+}
+
+func PrincipalFrom(ctx context.Context) (*Principal, bool)
+
+// DefaultMiddleware is Headers, CORS, Authenticate, outermost first. It is a
+// slice you can edit, the same shape web.DefaultMiddleware has.
+func DefaultMiddleware(cfg Config) ([]web.Middleware, error)
+func Headers(cfg HeadersConfig) web.Middleware
+func CORS(cfg CORSConfig) (web.Middleware, error)
+func Authenticate(cfg JWTConfig) (web.Middleware, error)
+
+// Authorization is per route. Both return a web.Middleware, so they wrap a
+// handler where it is mounted and nothing else in the service changes.
+func RequireScope(scope ...string) web.Middleware    // every one of them
+func RequireAnyScope(scope ...string) web.Middleware // at least one of them
+```
+
+```go
+srv.Use(append(web.DefaultMiddleware(app.Log), sec...)...)
+srv.Handle("POST /orders", security.RequireScope("orders:write")(orders))
+```
+
+**`DefaultMiddleware` assembles what the config asked for, and the omissions are rules rather than
+conveniences.** `Headers` is always in the slice. `CORS` joins it once `cors.allowedOrigins` names
+something, and `Authenticate` once the `jwt` section is filled in — so a service that wants headers
+only writes no `security` config at all and still gets them.
+
+A section that is **half** filled in is a startup error rather than a skip, which is the rule
+`web.New` already applies to half a `web.tls` pair and for the same reason: a misspelt key must
+never leave a service quietly unauthenticated. There are four such errors, and all four come from a
+constructor:
+
+| The config | The error |
+| --- | --- |
+| `jwt` with any of `issuer`, `audience`, `jwksUrl` missing | `security.jwt.<key>: required…` |
+| `jwt.jwksUrl` on plain `http`, outside loopback | `security.jwt.jwksUrl: … is plain http…` |
+| `cors.allowedOrigins: ["*"]` with `cors.allowCredentials` | `security.cors: … cannot be used with allowCredentials` |
+| `cors.allowCredentials` with no `cors.allowedOrigins` | `security.cors: allowCredentials is on but allowedOrigins is empty` |
+
+Every one of them lives in `Headers`, `CORS` or `Authenticate` rather than in `DefaultMiddleware`,
+so a service that wires the three by hand gets the same answers.
+
+**It is one package, and the ticket that opened it predicted two.** #34 was written expecting a
+heavy subpackage for assertion 2 of [8.1](#81-the-import-leak-check) to name. Measured before any
+code, on Go 1.26.3 against a bare `net/http` `main` of 8,365,513 bytes:
+
+| candidate | modules | binary delta |
+| --- | ---: | ---: |
+| `github.com/golang-jwt/jwt/v5` v5.3.1 | **1** | **+36 KB** |
+| `github.com/go-jose/go-jose/v4` v4.1.4 | 1 | +495 KB |
+| `github.com/coreos/go-oidc/v3` v3.20.0 | 3 | +1.17 MB |
+
+The repo split `goboot/web/metrics` out at 9 modules and `goboot/grpc/metrics` at 10. One module is
+below every line this repo has ever drawn, so **there is no subpackage and no new entry on the
+heavy list**. `goboot/security` links **3 modules**, which is `goboot`'s two plus `golang-jwt`, and
+`goboot/web` stays at 2. The prediction is recorded here rather than quietly dropped, because the
+reason it was wrong is the reason the rule is a measurement and not a habit.
+
+**The 36 KB is the dependency, not the Starter, and the difference is worth a second number.**
+Wiring this Starter into `examples/http-only` — the whole of `DefaultMiddleware` plus one
+`RequireScope` route — takes that binary from **6,807,817 to 7,508,233 bytes stripped**, which is
+**+700,416 bytes and +1 module**. Nearly all of the extra is stdlib that was already *compiled in*
+and was being dead-code eliminated: `goboot/web` on its own calls nothing that verifies an RSA or
+an ECDSA signature, so `crypto/rsa`, `crypto/ecdsa`, `crypto/elliptic` and `math/big` fall out of
+the link. Verifying a token calls them, so they stay. Only **two packages** are new in the whole
+dependency list, `goboot/security` and `golang-jwt` — the rest of the 0.66 MB is code that becomes
+reachable, which is a cost `go list` cannot show and only a binary can.
+
+That number is the one to quote to a user, and it is still the smallest of the three candidates:
+`go-oidc` would have added its 1.17 MB **on top** of the same 0.66 MB, because it verifies with the
+same stdlib.
+
+What the choice costs is written down too: `golang-jwt/jwt/v5` ships no JWKS client, so the key set
+below is about eighty lines of `crypto/rsa`, `crypto/ecdsa` and `encoding/json` that go-boot owns.
+`go-jose` would have deleted them for 459 KB and a lower-level call site.
+
+**`goboot/security` joins the short paths of assertion 2.** It is a package a user imports
+directly, so the same rule that keeps Prometheus out of `goboot/web` keeps it out of here. The list
+in [8.1](#81-the-import-leak-check) is seven names now, not six.
+
+**Authentication is not a global gate, and that is the whole shape of the package.** `Authenticate`
+verifies a bearer token **when one is there** and puts the `Principal` in the request context. It
+does not reject a request that carried no token. Rejecting is `RequireScope`'s job, at the mount,
+one route at a time.
+
+The alternative — a middleware that demands a token on every request — cannot work on this server:
+`/livez`, `/readyz` and `/actuator/*` share the listener (ADR `0003`, ADR `0006`), so a global gate
+either locks Kubernetes out of its own probes or grows a path allowlist, and a path allowlist is a
+security decision written in a config file that no compiler checks. Per-route wrapping is the
+opposite: the wrapper is at the mount, in Go, next to the handler it protects, and it is an
+ordinary `web.Middleware` so nothing about `Server.Handle` changes.
+
+**The trap that shape leaves is real, and it is named rather than designed away.** A route nobody
+wrapped is a route with no authorization. Go's type system cannot catch it, and neither can
+go-boot. What go-boot can do is make the wrapper short enough that leaving it off is visible in
+review, which is why `RequireScope` takes strings and not a builder.
+
+**`Principal.Scopes` reads two claim names and two shapes.** RFC 8693 writes `scope` as one
+space-separated string; Azure AD writes `scp`, sometimes as an array. Both names and both shapes are
+read, because a service that guessed wrong would fail every authorization check with no clue why.
+Roles get no helper at all — no claim name for them is standard, so `Principal.Claims` holds the
+whole payload and the three lines are the caller's.
+
+**Both no-argument forms mean "authenticated only".** `RequireScope()` and `RequireAnyScope()` name
+no scope, so there is none to fail. Read literally, "at least one of nothing" would be false and the
+second would refuse every caller — a footgun with no use behind it, since the only reason to write
+it is to demand a token.
+
+**A token that is present and bad is a 401 straight away**, with
+`WWW-Authenticate: Bearer error="invalid_token"` and an RFC 7807 body from `web.WriteProblem`, so a
+rejected token leaves in the same shape as every other error the service writes
+([4.0](#40-the-error-convention-every-starter-follows)). Carrying a broken token forward as "no
+Principal" would turn an expired token on a public route into a silent 200 and the same token on a
+guarded route into a 401 that says the wrong thing.
+
+The 401's `detail` is `invalid token` and nothing else. The reason the token failed — expired,
+wrong audience, unknown `kid` — goes to the **request logger** at WARN, `goboot.LoggerFrom`, which
+means it carries the same `requestId` as the access line `web.Logging` writes. The token itself is
+never logged: it is a bearer credential, and a log file is not where one belongs.
+
+**JWKS is the only key source.** No shared HMAC secret, and no PEM on disk. A symmetric secret is
+the alg-confusion hole in the shape that keeps being rediscovered, and every OAuth2 issuer worth
+pointing a resource server at publishes a JWKS endpoint. The key set is fetched **lazily, on the
+first token**, not at startup: fetching at startup would turn an auth-server outage into a service
+that will not boot, which is the same mistake as a liveness probe that touches a dependency.
+
+**Rotation is handled by the unknown `kid`, not by a timer.** A token whose `kid` is not in the
+cache triggers one refetch, rate-limited to **one every ten seconds** so a stream of junk `kid`s
+cannot be turned into a stream of requests to the issuer. Ten and not sixty: at six requests a
+minute the flood costs the issuer nothing, and a real rotation heals within ten seconds rather than
+within one. A fetch that FAILS starts the same floor, so an issuer that is down is not asked again
+per request. There is no background refresh goroutine: an issuer that rotates keys publishes the new
+one before it signs with it, so the first token carrying it is the only signal needed, and a
+goroutine that polls an endpoint nothing has asked for is a Component's worth of lifecycle for no
+gain.
+
+**A token with no `kid` is verified against every key in the set**, and the signature decides. A
+`kid` is not a unique identifier — a set may publish several keys without one, and an issuer part
+way through a rotation may briefly publish two under one name — so the cache holds a *list* per
+`kid`. Picking one key out of a map would be picking whichever parse order won, and a token signed
+by any of the others would then fail for no visible reason. Trying several never widens what
+verifies: the token still has to be signed by a key this issuer published.
+
+**`jwksUrl` must be `https`, and the constructor refuses anything else.** The one exception is a
+loopback host, which is what makes a local issuer and go-boot's own tests possible — the same
+carve-out RFC 8252 makes for native-app redirect URIs, and for the same reason: there is no path for
+an attacker to sit on. Everywhere else, plain `http` is a **total authentication bypass** rather
+than a weakness, because the key set *is* the root of trust: anyone who can rewrite that response
+chooses which keys this service believes, and so can mint any identity they like. It is the one
+misconfiguration in this section that looks like nothing at all in a YAML file.
+
+**Issuer and audience are both required, and `Authenticate` refuses a config without them** — as
+does `DefaultMiddleware`, which calls it. There is no `New` in this package: it starts nothing and
+holds nothing, so there is no Component to build. A resource
+server that does not check `aud` accepts every token the issuer minted, including the one meant for
+a different client of the same issuer — which is not a subtle failure, it is the whole reason the
+claim exists. `exp` is required on the token as well. This follows
+[4.0](#40-the-error-convention-every-starter-follows): the constructor validates its own config,
+and `Authenticate` reaches nothing outside the `JWTConfig` struct, so every one of these faults is
+a startup error rather than a 401 in production.
+
+**The algorithms are an allowlist** — `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`,
+`ES256`, `ES384` and `ES512` — and it is not a config key. Every entry is asymmetric, so `alg: none`
+and the HMAC-verified-with-the-RSA-public-key trick are both outside it, and neither is a thing a
+user should be able to switch on from a YAML file.
+
+It is the **second** lock rather than the first, and that is written here because the difference is
+measurable. The first lock is the key type: the key set hands back an `*rsa.PublicKey` or an
+`*ecdsa.PublicKey`, and `golang-jwt` refuses to verify an `HS256` or a `none` token with either.
+Deleting `WithValidMethods` from the parser leaves **every rejection in the test suite still
+passing**, which is the honest result and is why no end-to-end test claims to cover it. What the
+list adds is that the set this service accepts is the set written above, rather than whatever
+`golang-jwt` grows support for next; an internal test pins the nine names.
+
+**CORS refuses the dangerous mistake in the constructor**, which is the measurement
+[10](#10-what-go-boot-does-not-do) asked for. `allowedOrigins: ["*"]` together with
+`allowCredentials: true` is a startup error — the browser would refuse the pair anyway, so the
+configuration that looks like "allow everyone to log in" in fact allows nobody, and finding that
+out at boot beats finding it out from a support ticket. Origins are matched **exactly**; there is
+no pattern syntax, because a wildcard in the middle of an origin is how `evil-example.com` gets
+matched by a rule meant for `app.example.com`. `Vary: Origin` is set on every response, allowed or
+not, so a shared cache cannot serve one origin's answer to another.
+
+**The header set is four headers, and `X-Frame-Options` is not one of them.**
+
+| Header | Value | Why |
+| --- | --- | --- |
+| `X-Content-Type-Options` | `nosniff` | The one that matters on a JSON API: it stops a browser deciding a response is HTML. |
+| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'` | Nothing an API response contains should ever load or be framed. |
+| `Referrer-Policy` | `no-referrer` | An API URL routinely carries an id. |
+| `Strict-Transport-Security` | `max-age=<n>` | Only when `hstsMaxAge` is set. |
+
+`X-Frame-Options: DENY` is left out because `frame-ancestors 'none'` is what every current browser
+reads, and [4.3](#43-gobootweb--the-http-transport-starter) already said the header does nothing on
+a JSON API. HSTS is **off unless configured**, and that default is deliberate: sent over plain HTTP
+on a developer's machine it pins `localhost` to HTTPS in that browser for its whole `max-age`, and
+undoing it means a trip into browser internals.
+
+**No Preset wires it**, and the reason is [ADR 0010](docs/adr/0010-presets-have-no-options.md)
+rather than the import rule: a Preset takes no options, and every field of `JWTConfig` is a value
+only the service knows. A Preset that wired security would have to invent an issuer. So the wiring
+is the two lines above, in `main`, and a Preset user who wants them copies the body of `Full` —
+which is the documented escape hatch of [5](#5-the-presets-and-what-each-wires), not a fallback.
+
+**What #34 asked for and this does not do**, so the next ticket starts from a list rather than a
+guess: OIDC discovery (`/.well-known/openid-configuration`), so `jwksUrl` is written out by hand;
+token introspection for opaque tokens; roles, because no claim name for them is standard —
+Keycloak's `realm_access.roles` and Azure's `roles` disagree — and `Principal.Claims` holds the
+payload for anyone who wants to write the three lines; and mTLS or API keys.
+
 ---
 
 ## 5. The Presets, and what each wires
@@ -1750,6 +2010,7 @@ pinning.
 | `connectrpc.com/grpcreflect` | v1.3.0 | `goboot/grpc/reflection` | [#29](https://github.com/squall-chua/go-boot/issues/29) | the reflection protos, both v1 and v1alpha, and the static reflector. **One extra linked module**, same reason |
 | `connectrpc.com/otelconnect` | v0.9.0 | `goboot/trace/rpc` | [#12](https://github.com/squall-chua/go-boot/issues/12) | RPC spans. Separate subpackage, and `goboot/trace` filters `otelhttp` for RPCs or you get two nested spans |
 | `github.com/fergusstrange/embedded-postgres` | v1.34.0 | `goboot/db/dbtest` | [#13](https://github.com/squall-chua/go-boot/issues/13) | 3 linked modules against `testcontainers-go`'s 45, and no Docker daemon. Real PostgreSQL 18.3 up in 2.77s |
+| `github.com/golang-jwt/jwt/v5` | v5.3.1 | `goboot/security` | [#34](https://github.com/squall-chua/go-boot/issues/34) | **1 linked module with zero transitive dependencies**, +36 KB on its own — measured against `go-jose/v4` at 1 module and +495 KB and `coreos/go-oidc/v3` at 3 modules and +1.17 MB. Wiring the Starter costs **+700,416 bytes**, mostly stdlib crypto that stops being dead code once something verifies a signature; [4.7](#47-gobootsecurity--the-security-starter) has both numbers and why they differ. It ships no JWKS client, so `goboot/security` writes one over `crypto/rsa` and `crypto/ecdsa` |
 
 **No database driver is linked by a go-boot Starter.** The user blank-imports their own.
 `pgx/v5/stdlib` is +7.64 MB.
@@ -1788,7 +2049,9 @@ below.
    imports, so `.TestImports` and `.XTestImports` must be asked for explicitly. This is #3's hard
    rule, and it is about `go mod tidy`, not about the build.
 2. **No short-path package reaches a heavy optional package.** The short paths are `goboot`,
-   `goboot/web`, `goboot/db`, `goboot/actuator`, `goboot/grpc` and `goboot/preset`. The heavy
+   `goboot/web`, `goboot/db`, `goboot/actuator`, `goboot/grpc`, `goboot/preset` and
+   `goboot/security`, the last added by
+   [#34](https://github.com/squall-chua/go-boot/issues/34). The heavy
    optional packages are `goboot/trace`, `goboot/grpc/health`, `goboot/grpc/metrics`,
    `goboot/grpc/reflection`, `goboot/trace/rpc`, `goboot/db/dbtest` and `goboot/web/metrics`.
    `goboot/grpc/metrics` was added by [#41](https://github.com/squall-chua/go-boot/issues/41), and
@@ -1995,14 +2258,18 @@ tag, and it is settled in
 ([#38](https://github.com/squall-chua/go-boot/issues/38)). Nothing left below gates a tag: all four
 are additive.
 
+**The Security Starter has left this list.** It is settled in
+[4.7. `goboot/security`](#47-gobootsecurity--the-security-starter)
+([#34](https://github.com/squall-chua/go-boot/issues/34)): security headers, CORS, a JWT bearer
+middleware over a JWKS key set, and per-route scope checks. Two things it named are **not** in that
+section and are not on this list either, because neither is a Starter — OIDC discovery and opaque-token
+introspection are additions to `goboot/security`, listed at the end of 4.7.
+
 **The docs and examples strategy has left this list too.** It is settled in
 [13. Docs and examples](#13-docs-and-examples)
 ([#40](https://github.com/squall-chua/go-boot/issues/40)), which fixes the ten-minute path and the
 rule that keeps it from rotting.
 
-- **Security Starter** — authentication, authorization, JWT, OAuth2 resource server, security
-  headers. It owns the ground `goboot/web` deliberately left empty. Too large to phrase sharply
-  until it starts.
 - **Messaging Starter** — Kafka and RabbitMQ consumers as Components. The lifecycle contract it was
   waiting on is settled: a consumer is `TierTransport` and is the named user of the optional
   `Drainer`. Specifiable now, but not a v1 Starter.
@@ -2025,7 +2292,7 @@ policy: follow it and a tag can be cut with nothing left to decide.
 ### One tag covers every Starter
 
 go-boot is **one Go module** ([1. Ground rules](#1-ground-rules)), so there is **one tag**, and it
-covers all fourteen packages at once. A fix in `goboot/db` bumps the version number a root-only user
+covers all fifteen packages at once. A fix in `goboot/db` bumps the version number a root-only user
 sees, even though nothing they import changed. That is the price of the one-module layout, and
 [#3](https://github.com/squall-chua/go-boot/issues/3) measured it as small: a root-only consumer
 downloads 1 zip and 2.9 KB, so the upgrade they did not need is an upgrade they barely pay for.
@@ -2034,11 +2301,13 @@ The reverse also holds, and it is the part to say out loud: **a user cannot pin 
 older version than another.** There is one version number for the whole library. Anyone who needs
 otherwise is asking for the multi-module layout #3 refused.
 
-### The public surface is these fourteen packages
+### The public surface is these fifteen packages
 
 `goboot`, `goboot/actuator`, `goboot/web`, `goboot/web/metrics`, `goboot/grpc`,
 `goboot/grpc/health`, `goboot/grpc/metrics`, `goboot/grpc/reflection`, `goboot/db`,
-`goboot/db/dbtest`, `goboot/trace`, `goboot/trace/rpc`, `goboot/preset` and `goboot/preset/traced`.
+`goboot/db/dbtest`, `goboot/trace`, `goboot/trace/rpc`, `goboot/preset`, `goboot/preset/traced`
+and `goboot/security`, the last added by
+[#34](https://github.com/squall-chua/go-boot/issues/34).
 Every exported identifier in them is covered by the promise below. `goboot/db/dbtest` is on the
 list and not an afterthought: go-boot's own tests use it, so it is shipped code a user may
 reasonably build on.
@@ -2055,7 +2324,7 @@ dashboard breaks on a renamed JSON field exactly as a compile breaks on a rename
 A new package cannot appear unnoticed: `.github/check-imports.sh` reads the package list from
 `go list ./...` and pins one row per package in `.github/module-counts.txt`, regenerated only by
 `--update`, so **a new package fails CI until someone updates the golden file**
-([8.1](#81-the-import-leak-check)). Nothing ties that file to the fourteen names written above,
+([8.1](#81-the-import-leak-check)). Nothing ties that file to the fifteen names written above,
 though, so **whoever updates it updates this list in the same commit.** #41 is the first change to
 test that rule, and it held: `goboot/grpc/metrics` went into the list and the golden file
 together. [#45](https://github.com/squall-chua/go-boot/issues/45) is the second, and it held the
@@ -2077,7 +2346,7 @@ it ends as soon as that reason does.
 
 Once `v1.0.0` is cut, for the whole life of `v1`:
 
-- **No exported identifier in the fourteen packages is removed or renamed, and no function or method
+- **No exported identifier in the fifteen packages is removed or renamed, and no function or method
   signature changes.**
 - **No config key is removed or renamed, and no default value changes.** `maxOpenConns` is still
   `10` on the last `v1` release. A silently improved default moves a production knob its owner
@@ -2129,7 +2398,7 @@ can carry any of them.
 Exactly one item was ever able to change the surface of an existing Starter: the error-handling
 convention ([#38](https://github.com/squall-chua/go-boot/issues/38)). It decided what every Starter
 returns on misconfiguration and whether a go-boot error type exists at all — a signature question
-across all fourteen packages. Freezing the surface before it landed would have frozen it wrong, and
+across all fifteen packages. Freezing the surface before it landed would have frozen it wrong, and
 the only way out of that is a `v2` on a library that has barely shipped.
 
 So the gate was one sentence, and it was checkable rather than a judgement call:

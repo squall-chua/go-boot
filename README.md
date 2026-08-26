@@ -157,8 +157,8 @@ what a Preset wires, so the copy ships as compiling code and one test drives bot
 
 ### Where to go next
 
-Everything below is reference, read as you need it: the default middleware, the Actuator, gRPC,
-tracing, the database and the Preset. Most of those sections quote fragments and single lines
+Everything below is reference, read as you need it: the default middleware, security, the Actuator,
+gRPC, tracing, the database and the Preset. Most of those sections quote fragments and single lines
 rather than whole wiring, and a fragment has no file it can be lifted from whole, so it is not
 checked. Where a block *is* a whole excerpt it carries a `<!-- from: ... -->` comment, and CI
 checks it against that file exactly as it does on the path above. The marker is the whole rule:
@@ -248,6 +248,131 @@ these metrics copies the body of `Full`.
 Errors on the wire are RFC 7807 documents from `web.WriteProblem`, so a panic and a hand-written
 400 come out in the same shape. `web.DecodeJSON` reads a request body with the size cap, unknown
 field rejection and readable errors that `json.NewDecoder(r.Body).Decode` leaves to you.
+
+## Security
+
+`goboot/security` is opt-in by import: security headers, CORS, a JWT bearer middleware over a JWKS
+key set, and per-route scope checks. A service that does not import it links none of it.
+
+```yaml
+security:
+  headers:
+    hstsMaxAge: 180d # 0, which is off, is the default
+  cors:
+    allowedOrigins: [https://app.example.com]
+  jwt:
+    issuer: https://auth.example.com/
+    audience: orders-api
+    jwksUrl: https://auth.example.com/.well-known/jwks.json
+```
+
+```go
+sec, err := security.DefaultMiddleware(cfg.Security)
+if err != nil {
+    return err
+}
+srv.Use(append(web.DefaultMiddleware(app.Log), sec...)...)
+
+srv.Handle("POST /orders", security.RequireScope("orders:write")(orders))
+```
+
+`DefaultMiddleware` is a slice you can print and edit. `Headers` is always in it; `CORS` joins once
+`allowedOrigins` names something, and `Authenticate` once the `jwt` section is filled in. So a
+service that wants headers only writes no `security` config at all and still gets them.
+
+A section that is only **half** filled in is a startup error, not a skip — a misspelt key must never
+leave a service quietly unauthenticated. Every one of those errors comes from `Headers`, `CORS` or
+`Authenticate` rather than from `DefaultMiddleware`, so wiring the three by hand gets you the same
+answers.
+
+### Authentication is not a global gate
+
+`Authenticate` verifies a bearer token **when one is there** and puts a `Principal` in the request
+context. It does not reject a request that carried no token. Rejecting is `RequireScope`'s job, at
+the mount.
+
+That is not a preference. `/livez`, `/readyz` and `/actuator/*` share this listener, so a middleware
+demanding a token on every request would either lock Kubernetes out of its own probes or grow a path
+allowlist — a security decision written in a config file that no compiler checks. The wrapper goes
+next to the handler it protects instead, in Go.
+
+**The trap that leaves is real, and go-boot cannot catch it: a route nobody wrapped is a route with
+no authorization.** What go-boot can do is keep the wrapper short enough that its absence shows up
+in review.
+
+A token that is present and **bad** is a 401 straight away, even on a route no `RequireScope` wraps,
+with `WWW-Authenticate: Bearer error="invalid_token"` and an RFC 7807 body. The reason it failed
+goes to the request logger at WARN, carrying the same request ID as the access line; the caller is
+told none of it, and the token itself is never logged.
+
+Read the Principal in a handler:
+
+```go
+p, ok := security.PrincipalFrom(r.Context())
+if !ok {
+    // No token was presented. On a route no RequireScope wraps, that is
+    // an anonymous caller rather than an error.
+}
+```
+
+`Principal` carries `Subject`, `Issuer`, `Scopes` and the whole claim map. `Scopes` reads `scope`
+(one space-separated string) and `scp` (a string or an array), because issuers disagree. Roles have
+no helper, because no claim name for them is standard either: Keycloak writes `realm_access.roles`
+and Azure writes `roles`, so `Claims` holds the payload and the three lines are yours.
+
+`RequireScope()` and `RequireAnyScope()` with **no** arguments both mean "just be authenticated".
+
+### Keys, and what is checked
+
+**JWKS is the only key source.** No shared HMAC secret and no PEM on disk. The key set is fetched
+**lazily, on the first token** — fetching at startup would turn an auth-server outage into a service
+that will not boot. Rotation needs no timer and no goroutine: a token with a `kid` the cache does not
+hold triggers one refetch, and no more than one every ten seconds, so junk `kid`s cannot be turned
+into traffic against your issuer.
+
+`issuer`, `audience` and `jwksUrl` are all **required**, and the constructor says which one is
+missing. The audience check is the one worth defending: a resource server that skips it accepts
+every token the issuer minted, including tokens meant for a different client of the same issuer.
+`exp` is required on the token too, and the algorithms are a fixed allowlist — `RS*`, `PS*`, `ES*`,
+all asymmetric, with no config key that could add `HS256` or `none`.
+
+**`jwksUrl` must be `https`.** A loopback host is the one exception, so a local issuer and your own
+tests still work. Everywhere else plain `http` is refused at startup, and it is worth knowing why it
+is refused rather than merely discouraged: the key set *is* what your service trusts, so anyone who
+can rewrite that response picks the keys you believe and can mint any identity they like. It is a
+total bypass that looks like nothing in a config file.
+
+A token that carries no `kid` is checked against every key in the set, and the signature decides.
+
+### Headers and CORS
+
+Four headers, and `X-Frame-Options` is not one of them: `frame-ancestors 'none'` in the CSP is what
+current browsers read, and on a JSON API the older header does nothing.
+
+| Header | Value |
+| --- | --- |
+| `X-Content-Type-Options` | `nosniff` |
+| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'` |
+| `Referrer-Policy` | `no-referrer` |
+| `Strict-Transport-Security` | `max-age=<n>`, only when `hstsMaxAge` is set |
+
+**HSTS is off until you configure it**, and that default is deliberate: sent over plain HTTP on your
+machine, it pins `localhost` to HTTPS in that browser for the whole `max-age`, and undoing it means
+a trip into browser internals.
+
+CORS **refuses the dangerous mistake at startup**: `allowedOrigins: ["*"]` together with
+`allowCredentials: true` is an error rather than a note in this file. Origins are matched exactly —
+there is no pattern syntax, because a wildcard in the middle of an origin is how
+`app.example.com.evil.test` gets matched by a rule meant for `app.example.com`. `Vary: Origin` is on
+every response, allowed or not, so a shared cache cannot serve one origin's answer to another.
+
+**What it costs.** One module, `github.com/golang-jwt/jwt/v5`, with no transitive dependencies of its
+own. Wiring the whole of `DefaultMiddleware` plus one guarded route into `examples/http-only` takes
+that binary from 6,807,817 to 7,508,233 bytes stripped: **+700,416 bytes**, nearly all of it stdlib
+crypto that stops being dead code once something verifies a signature.
+
+**No Preset wires it**, because a Preset takes no options and every field of the `jwt` section is a
+value only your service knows. The two lines above go in `main`.
 
 ## The Actuator
 

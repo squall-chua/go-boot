@@ -73,7 +73,9 @@ report "1. the base package and its tests import no go-boot subpackage" "$bad"
 
 # 2. No short-path package reaches a heavy optional package. The rule as
 #    first written listed only `goboot`, and missed goboot/preset, whose
-#    Preset dragged the Actuator into an HTTP-only binary.
+#    Preset dragged the Actuator into an HTTP-only binary. goboot/security
+#    joined the list with #34: it is a package a user imports directly, so
+#    the rule that keeps Prometheus out of goboot/web keeps it out of there.
 heavy="$M/trace $M/grpc/health $M/grpc/metrics $M/grpc/reflection $M/trace/rpc $M/db/dbtest $M/web/metrics"
 leaked=0
 reaches() { # <package> <packages it must not reach>...
@@ -88,7 +90,7 @@ reaches() { # <package> <packages it must not reach>...
 		fi
 	done
 }
-for p in "$M" "$M/web" "$M/db" "$M/actuator" "$M/grpc" "$M/preset"; do
+for p in "$M" "$M/web" "$M/db" "$M/actuator" "$M/grpc" "$M/preset" "$M/security"; do
 	reaches "$p" $heavy
 done
 # goboot/preset/traced is the tracing twin. It is the one package allowed to

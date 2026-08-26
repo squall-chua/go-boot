@@ -9,6 +9,7 @@ goboot/grpc/metrics      10  12
 goboot/grpc/reflection    3   5
 goboot/preset            16  16
 goboot/preset/traced     36  36
+goboot/security           3   3
 goboot/trace             25  25
 goboot/trace/rpc         10  27
 goboot/web                2   2

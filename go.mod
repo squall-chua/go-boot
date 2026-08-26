@@ -9,6 +9,7 @@ require (
 	connectrpc.com/otelconnect v0.9.0
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.24.1
