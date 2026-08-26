@@ -2348,8 +2348,10 @@ In scope for go-boot, but not in this spec and not blocking the *building* of v1
 **The error-handling convention has left this list.** It was the one item that gated the `v1.0.0`
 tag, and it is settled in
 [4.0. The error convention every Starter follows](#40-the-error-convention-every-starter-follows)
-([#38](https://github.com/squall-chua/go-boot/issues/38)). Nothing left below gates a tag: all four
-are additive.
+([#38](https://github.com/squall-chua/go-boot/issues/38)). Nothing left below gates a tag: both
+remaining entries are additive. (It read "four" until
+[#35](https://github.com/squall-chua/go-boot/issues/35) — one *ahead* of the list, because #34
+removed a bullet without touching the number.)
 
 **The Security Starter has left this list.** It is settled in
 [4.7. `goboot/security`](#47-gobootsecurity--the-security-starter)
@@ -2363,9 +2365,18 @@ introspection are additions to `goboot/security`, listed at the end of 4.7.
 ([#40](https://github.com/squall-chua/go-boot/issues/40)), which fixes the ten-minute path and the
 rule that keeps it from rotting.
 
-- **Messaging Starter** — Kafka and RabbitMQ consumers as Components. The lifecycle contract it was
-  waiting on is settled: a consumer is `TierTransport` and is the named user of the optional
-  `Drainer`. Specifiable now, but not a v1 Starter.
+**The Messaging Starter has left this list, without joining v1.** It is specified in
+[14. The Messaging Starter](#14-the-messaging-starter-specified-and-post-v1)
+([#35](https://github.com/squall-chua/go-boot/issues/35)): two Starters rather than one, `goboot/kafka`
+over franz-go and `goboot/rabbit` over `amqp091-go`. It is the first entry to leave for a section
+outside [4](#4-the-public-api-of-every-v1-starter), and the distinction is the point — the design is
+settled, the fifteen packages are unchanged, and it ships after `v1.0.0`. Specifying it also added
+a condition this bullet did not have. A consumer is still the named user of `Drainer`, but its
+`Drain` **cannot be the thing that waits for in-flight work**: `Run` hands every `Drain` a context
+with no deadline that nothing can cancel, so a `Drain` that waits hangs the whole shutdown with
+nothing able to interrupt it. The waiting moves to `Stop`, which has a real budget.
+[14](#14-the-messaging-starter-specified-and-post-v1) has the code references and the consequences.
+
 - **Cache / Redis Starter** — likely a thin wiring Starter; unclear whether it earns its place.
 - **Scaffold CLI design** — commands, flags, what it writes, how thin the generated `main` stays.
   It already carries three requirements from this spec: write the `myservice migrate` subcommand and
@@ -2703,6 +2714,315 @@ None is on the ten-minute path, and this section does not change any of them.
 - `CONTEXT.md` — the vocabulary. A newcomer meets Starter, Preset, Component and Tier in the
   README as they go; this file is where each definition lives.
 - `docs/adr/` — one decision per file, read when someone asks why go-boot is like this.
+
+---
+
+## 14. The Messaging Starter, specified and post-v1
+
+Specified by [#35](https://github.com/squall-chua/go-boot/issues/35). It has its own section rather
+than a `4.x` one because [4. The public API of every v1 Starter](#4-the-public-api-of-every-v1-starter)
+is tied to the fifteen packages
+[12. Versioning and release policy](#12-versioning-and-release-policy) promises, and messaging is
+not one of them. [11. Deferred past v1](#11-deferred-past-v1) called it "specifiable now, but not a
+v1 Starter", and both halves of that sentence are still true: the design below is settled, and it
+ships after `v1.0.0`.
+
+### It is two Starters, not one with two backends
+
+**`goboot/kafka` and `goboot/rabbit`, side by side with `goboot/web` and `goboot/db`.** There is no
+`goboot/messaging` parent and no shared `Consumer` interface.
+
+`CONTEXT.md`'s rule is that Go links by import, so a Kafka user must not link RabbitMQ. Two
+packages satisfy that on their own. The question the ticket asked was whether they should hang off
+a parent, the way `goboot/grpc/health` hangs off `goboot/grpc`, and the answer is no, for two
+reasons:
+
+- **A parent would have nothing in it.** What the two consumers share is `goboot.Component`,
+  `goboot.Drainer` and `goboot.Checker`, which already live in the base package. A parent holding
+  only a `Handler` type is a package that exists to be a namespace.
+- **The message types genuinely differ, and flattening them loses information.** Kafka acknowledges
+  by committing a partition offset; AMQP acknowledges one delivery tag and chooses whether to
+  requeue. A shared `Message` would carry `Partition`, `Offset`, `DeliveryTag` and `Redelivered`
+  with half of them zero on any given broker, and the first user to branch on which half is
+  populated is back to writing broker-specific code through an abstraction that promised they would
+  not have to.
+
+The rejected shape is recorded because it is the one a reader will propose again: an empty
+`goboot/messaging` directory is also the obvious place for the next shared dependency to hide,
+which is the argument [8.1](#81-the-import-leak-check) already made about `goboot/preset/traced`.
+
+**One Component consumes one topic or one queue.** Two topics is `New` called twice and `Add`
+called twice, which is how `goboot/web` already handles two ports. That removes the routing table,
+the per-topic handler map and the question of what happens when one topic's handler panics and the
+others are mid-flight. `Name()` carries the topic, so the two Components do not collide on the
+duplicate-name check.
+
+### The dependency each one links
+
+Measured on go1.26.3, linux/amd64, with `go build -ldflags="-s -w"` against a `fmt.Println`
+baseline of 1,589,410 bytes. "Linked" counts non-stdlib module roots the way
+`.github/check-imports.sh` counts them.
+
+| Candidate | Version | Linked | Stripped delta | Verdict |
+|---|---|---|---|---|
+| `github.com/twmb/franz-go` | v1.21.6 | 4 | **+7,352,423 B (+7.35 MB)** | **chosen for Kafka** |
+| `github.com/segmentio/kafka-go` | v0.4.51 | 3 | +4,845,671 B (+4.85 MB) | smallest, but still `v0` |
+| `github.com/IBM/sarama` | v1.60.2 | 15 | +6,385,767 B (+6.39 MB) | drags Kerberos and `go-spew` |
+| `github.com/confluentinc/confluent-kafka-go/v2` | v2.15.0 | 1 | +10,692,622 B, **cgo build only** | **cannot build without cgo** |
+| `github.com/rabbitmq/amqp091-go` | v1.14.0 | 1 | **+3,825,767 B (+3.83 MB)** | **chosen for RabbitMQ** |
+
+**`confluent-kafka-go` is excluded by a compile, not by a preference.** With `CGO_ENABLED=0` it
+does not build at all — measured, the errors are `undefined: kafka.NewConsumer` and
+`undefined: kafka.ConfigMap`, because every symbol in the package is behind a cgo build tag. Its
+row in the table is therefore the only one not measured under the shared build: 10.69 MB is what
+it costs with `CGO_ENABLED=1`, which is the only way it compiles. Every other go-boot dependency is
+pure Go, and `CGO_ENABLED=0` is what puts a service in a distroless or scratch image. A Starter
+that silently takes that away is not a Starter.
+
+**franz-go is the second-largest thing in the table, and that is the one number this section
+spends rather than saves.** Only cgo-only confluent is bigger, and sarama is 966,656 bytes
+*smaller*. go-boot's usual tie-break is size, so choosing the heavier client needs a reason, and it
+is the other column: **4 linked modules against 15.** Module count is what
+`.github/module-counts.txt` pins, what a `go mod tidy` propagates into every consumer's graph, and
+what turns into upgrade work forever; 0.97 MB is paid once at link time.
+
+**And those fifteen modules are the argument, not just the count.** `jcmturner/gokrb5/v8` and its
+four supporting modules are a Kerberos implementation, `golang.org/x/crypto` and
+`golang.org/x/net` come with it, and
+`github.com/davecgh/go-spew` — a test-output formatter — is a non-test dependency of a consumer
+that only wanted to read a topic.
+
+**`segmentio/kafka-go` is the close call, and it loses on version, not on size.** It is 1 module
+and 2.51 MB lighter than franz-go, which under go-boot's usual rule would win. It is still
+`v0.4.51`, tagged 2026-04-23, and it has been on the `v0.4.x` line for years.
+[12](#12-versioning-and-release-policy) says a `v0` may break anything on a minor bump; putting one
+under a package covered by go-boot's own `v1.x` promise means inheriting that risk permanently.
+franz-go is `v1.21.6`, tagged 2026-08-12.
+
+> **One claim here is not measured, and it is the one to check before writing code.** The prose
+> above rests on version lines and module counts, all of which were measured. It does **not** rest
+> on a comparison of the two clients' consumer-group correctness — cooperative rebalancing,
+> partition revocation during a commit, behaviour on a coordinator move — because none of that can
+> be measured without a real broker, and none was run. If the human reviewing this section believes
+> segmentio's consumer group is good enough, 2.51 MB and one module are a real argument for it, and
+> nothing else in this section changes: the API below is written against neither client's types.
+> The test that settles it is a three-broker cluster, one consumer group of two members, a rolling
+> restart, and a count of duplicated and dropped messages on each client.
+
+**RabbitMQ has no close call.** `amqp091-go` is the RabbitMQ team's own continuation of
+`streadway/amqp`, it is `v1`, and it links **one module with zero transitive dependencies**. The
+3.83 MB is almost entirely `crypto/tls`, which stops being dead code the moment a connection is
+encrypted — the same effect [4.7](#47-gobootsecurity--the-security-starter) recorded for
+`goboot/security`.
+
+### The API
+
+```go
+package kafka
+
+type Config struct {
+	Brokers []string `yaml:"brokers"` // required, at least one
+	Topic   string   `yaml:"topic"`   // required
+	Group   string   `yaml:"group"`   // required, the consumer group id
+
+	TLS  bool       `yaml:"tls"`  // false
+	SASL SASLConfig `yaml:"sasl"` // off when Mechanism is empty
+}
+
+type SASLConfig struct {
+	Mechanism string `yaml:"mechanism"` // "plain", "scram-sha-256", "scram-sha-512"
+	Username  string `yaml:"username"`
+	Password  string `yaml:"password"` // from an environment variable
+}
+
+// Message is what the handler is given. It is Kafka's shape, not a shared one.
+type Message struct {
+	Key, Value []byte
+	Topic      string
+	Partition  int32
+	Offset     int64
+	Headers    map[string][]byte
+	Time       time.Time
+}
+
+// Handler processes one message. Returning an error means the offset is NOT
+// committed, so the message is redelivered. There is no dead-letter policy in
+// this Starter: a handler that wants one writes it.
+//
+// ctx is NOT Start's ctx, which goboot.Component documents as unsafe to keep.
+// It descends from a context the Component makes for itself in Start and
+// cancels in Stop, so a handler still running when the stop budget expires
+// sees its ctx cancelled and must return.
+type Handler func(ctx context.Context, m Message) error
+
+func New(cfg Config, log *slog.Logger, h Handler) (*Component, error)
+
+func (c *Component) Name() string                     // "kafka:" + cfg.Topic
+func (c *Component) Tier() goboot.Tier                // TierTransport
+func (c *Component) Start(ctx) (<-chan error, error)  // dial, join the group, start the loop
+func (c *Component) Drain(ctx context.Context)        // stop fetching; returns at once
+func (c *Component) Stop(ctx context.Context) error   // wait out in-flight handlers within
+                                                      // ctx, then cancel them, leave the
+                                                      // group and close the client
+func (c *Component) Check(ctx context.Context) error  // the loop's stored fatal error, or nil
+```
+
+**There is no `workers` key, and the two `Config`s do not have the same concurrency knobs.** A
+handler runs one message at a time per partition or per queue. For Kafka that is not a limitation
+being papered over — partitions *are* Kafka's unit of parallelism, and processing one partition
+sequentially is what preserves the per-partition ordering the broker guarantees. A service that
+wants more throughput adds partitions and pods, which is the same answer Kafka itself gives. So
+Kafka gets no knob at all, and RabbitMQ gets `prefetch`, because AMQP has no partitions and its QoS
+window is the native way to say the same thing. They differ because the brokers differ, which is
+this section's whole thesis; a shared `workers` key would have hidden that behind a number that
+means two different things.
+
+> `workers` is the first key to add if a real service measures one-at-a-time as too slow, and
+> adding it is additive. Shipping it now would mean specifying how N concurrent handlers interact
+> with the `Stop` wait and with offset commit ordering, for no user who has asked.
+
+`goboot/rabbit` is the same six methods and the same `Handler` shape over its own `Message` and
+`Config`:
+
+```go
+package rabbit
+
+type Config struct {
+	URL      string `yaml:"url"`      // required, amqp:// or amqps://; from an environment variable
+	Queue    string `yaml:"queue"`    // required
+	Prefetch int    `yaml:"prefetch"` // 1; the AMQP QoS window
+	RequeueOnError bool `yaml:"requeueOnError"` // true; Nack(requeue) when the handler errors
+}
+
+type Message struct {
+	Body        []byte
+	Exchange    string
+	RoutingKey  string
+	Headers     map[string]any
+	Redelivered bool
+}
+
+func New(cfg Config, log *slog.Logger, h Handler) (*Component, error)
+// Name() is "rabbit:" + cfg.Queue. Everything else reads as above.
+```
+
+**A dropped broker connection is not a death, and not a failed `Check`.** Both clients reconnect,
+so a coordinator moving or a broker restarting is ordinary and the fetch loop rides it out. The
+`<-chan error` from `Start` carries only what the loop cannot recover from — credentials rejected,
+the topic or queue gone, the group fenced — and a death is fatal, so that restarts the pod.
+`Check` reports that same stored error and nothing else. In particular **it does not fail on an
+idle topic and it never touches the network**: `CONTEXT.md` requires a Check to respect its
+context and run inside the probe's deadline, and a Check that dialled the broker would turn a
+broker blip into an unready pod, which is the failure mode
+[2](#2-the-component-lifecycle-contract) keeps liveness away from for the same reason.
+
+**Neither package declares a queue, a topic, an exchange or a binding.** Consuming from something
+that does not exist is a startup error naming it, not a silent `QueueDeclare`. Topology belongs to
+whatever owns the broker, and a Starter that creates it on the way past turns a typo in
+`rabbit.queue` into a new empty queue nothing ever publishes to.
+
+**Errors follow [4.0](#40-the-error-convention-every-starter-follows) with no new shape.** The
+locator is the config key for a bad key — `kafka.brokers: required, at least one` — and the
+Component name for a phase failure, which `Run` already prefixes: `start kafka:orders: ...`.
+
+### Drain, which is the part this ticket exists to settle
+
+[11](#11-deferred-past-v1) called a consumer "the named user of the optional `Drainer`", and
+specifying one surfaces a hole in that interface that nothing has stood in yet.
+
+**`Drain` has no timeout, and cannot be given one.** `App.Run` calls
+`a.Stop(context.WithoutCancel(ctx))`, and `App.drain` passes that context straight to every
+`Drainer`. So the context a consumer's `Drain` receives has no deadline and can never be cancelled.
+`Drainer.Drain` also returns nothing, and the Drainers run one after another in start order, so a
+`Drain` that blocks blocks the whole shutdown with nothing able to interrupt it.
+
+**This has never mattered, because go-boot ships exactly one `Drainer`.** Grep the repository: the
+only `Drain` outside tests and `prototypes/` is `actuator/actuator.go`, and its whole body is
+`a.draining.Store(true)`. `goboot/web` and `goboot/grpc` do not implement `Drainer` at all — they
+let go of connections in `Stop`, through `http.Server.Shutdown`, which has `stopTimeout` behind it.
+So a consumer is not merely the first Drainer outside the Transports, as
+[11](#11-deferred-past-v1) put it. It is the **first `Drain` in go-boot with anything to do**, and
+the interface has no budget to do it in.
+
+**So the consumer's `Drain` stops fetching and returns, and the waiting moves to `Stop`.** `Drain`
+tells the fetch loop to take no more messages, which is exactly what the interface's name promises
+and all it can safely do. `Stop` is where in-flight handlers are waited on, because `stopStarted`
+wraps `Stop`'s context in `context.WithTimeout(ctx, a.life.StopTimeout)` — a real deadline, which
+is the thing `Drain` does not have. When it expires, `Stop` cancels the handler context and closes
+the client anyway, so shutdown cannot hang.
+
+This needs no change to `goboot`: no `Drain` signature change, no error return, no new timeout key.
+It reuses the budgets that exist, and it puts the waiting in the only phase that has one.
+
+The three consequences, each of which must be in the package documentation:
+
+- **`lifecycle.stopTimeout` becomes the handler's real budget**, and its 10s default was sized for
+  cutting a gRPC stream, not for finishing a message. A service whose handlers run longer raises
+  it. The `lifecycle.drainDelay` that runs in between is a head start rather than the budget: it is
+  there so a load balancer sees the 503, and a consumer gets its 5s free. `drainDelay` plus
+  `stopTimeout` must still fit the orchestrator's grace period — Kubernetes' default is 30s, which
+  [2](#2-the-component-lifecycle-contract) already sizes the defaults against, and 5s plus 10s
+  leaves room.
+- **Delivery is at-least-once, and shutdown is where that gets exercised.** A handler still running
+  when `stopTimeout` expires has its context cancelled with its offset uncommitted, so the message
+  is redelivered to whoever picks up the partition. A handler must be idempotent. This is a
+  property of every consumer ever written, but it is the sentence users skip, so it goes in the
+  package doc comment rather than only here.
+- **Drain order is start order, and for a consumer that is the right way round.** The Actuator is
+  `TierObserve` and drains first, so `/readyz` is already answering 503 before the consumer stops
+  fetching. `TierTransport` also means the consumer stops before the database pool, so a handler
+  finishing during `drainDelay` still has its pool.
+
+**The drain-order test the ticket asks for** records into one slice from each Component's `Drain`
+and `Stop`, then asserts the sequence: actuator drains, consumer drains, consumer stops, actuator
+stops. It is a `goboot`-level test using fakes. Each consumer package then needs three of its own,
+against a fake fetch loop rather than a broker: `Drain` returns while a handler is deliberately
+still running; `Stop` blocks until that handler returns; and `Stop` gives up, cancels the handler's
+context and returns anyway once its own context expires. The third is the one that would catch a
+hung shutdown, so it is the one not to skip. None needs a broker.
+
+### What changes in this document, and in CI, when the code lands
+
+Nothing below is edited now. The packages do not exist, and
+[12](#12-versioning-and-release-policy) is a promise about what ships. Written out here so whoever
+builds this has the list rather than rediscovering it:
+
+- **[7](#7-dependencies-and-the-ticket-that-chose-each-one) gains two rows**, for
+  `github.com/twmb/franz-go` and `github.com/rabbitmq/amqp091-go`, each citing #35 in the Ticket column and carrying the
+  measured numbers from the table above. That section opens "go-boot links these and nothing else",
+  so it is the one this design most directly invalidates, and re-measuring at the pinned versions is
+  part of writing the rows — [7](#7-dependencies-and-the-ticket-that-chose-each-one) says to
+  re-check the proxy before pinning.
+- **[8.1](#81-the-import-leak-check) assertion 2 gains two heavy packages**, `goboot/kafka` and
+  `goboot/rabbit`, and two lines using the pattern `goboot/preset/traced` already established —
+  each checked against the heavy list minus itself:
+
+  ```sh
+  reaches "$M/kafka"  $(printf '%s\n' $heavy | grep -vxF "$M/kafka")
+  reaches "$M/rabbit" $(printf '%s\n' $heavy | grep -vxF "$M/rabbit")
+  ```
+
+  That is what makes "a Kafka user links no RabbitMQ, and the reverse" a rule the toolchain checks.
+  It needs no sixth assertion: assertion 2 already takes an arbitrary package and an arbitrary
+  list, and the existing helper does the work.
+- **[8.1](#81-the-import-leak-check)'s own written-out count goes stale, and must move in the same
+  commit.** Its note reads that `goboot/preset/traced` "is checked against the other **six** heavy
+  packages"; with `goboot/kafka` and `goboot/rabbit` on the list that becomes eight. That note
+  already warns the number "moves whenever the list does" and has been wrong twice — this is the
+  third time, and the first where it was seen coming.
+- **`.github/module-counts.txt` gains two rows**, and a new package fails CI until it does.
+  Predicted, from `goboot`'s own 2 plus each client's linked count: `goboot/kafka 6 6` with
+  franz-go — 5 with segmentio — and `goboot/rabbit 3 3`. Predictions, not measurements: the real
+  numbers are whatever `--update` writes, and [8.1](#81-the-import-leak-check) has a standing habit
+  of these moving by one or two.
+- **[12](#12-versioning-and-release-policy)'s package list goes from fifteen to seventeen**, in the
+  same commit as the golden file, which is the rule that section states and #41 and #45 have each
+  already held to once.
+- **No Preset wires either one, and no Preset can.** A consumer needs a topic and a handler
+  function, and ADR `0010` says a Preset takes no options, so there is nowhere for either to come
+  from. `goboot/preset` is a short path, so assertion 2 turns that from a statement into a check.
+- **Neither package is on the ten-minute path** of [13](#13-docs-and-examples). It gains one
+  compiled example directory of its own, under the same rule as the rest.
 
 ---
 
