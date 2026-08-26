@@ -27,9 +27,17 @@
 //
 //	srv.Use(append(web.DefaultMiddleware(app.Log), metrics.Middleware)...)
 //
-// It records in a defer, so that placement is safe — see record below. It is
-// not wired by preset.Full, because a Preset that imported this package would
-// charge every Preset user for Prometheus. A Preset user who wants these
+// It records in a defer, so that placement is safe — see record below.
+//
+// APPEND it; do not splice it above web.Logging. Logging hands the layers
+// below it a new request, and http.ServeMux fills r.Pattern in place on the
+// one it routed, so a middleware placed above Logging reads an EMPTY route
+// and every route collapses onto the series meant for requests that matched
+// nothing. trace.RouteSpanName is innermost in trace.DefaultMiddleware for
+// this same reason. Measured and pinned by #47.
+//
+// It is not wired by preset.Full, because a Preset that imported this
+// package would charge every Preset user for Prometheus. A Preset user who wants these
 // metrics copies the body of Full, which is the documented escape hatch.
 package metrics
 
@@ -104,7 +112,9 @@ func Middleware(next http.Handler) http.Handler {
 // operator most wants to see would be the one failure not counted.
 //
 // r.Pattern is read here rather than in Middleware because http.ServeMux only
-// fills it in once it has routed, which happens inside next.
+// fills it in once it has routed, which happens inside next. It fills it IN
+// PLACE, on the request it was handed, which is what makes the placement rule
+// in the package doc above a real rule and not a preference.
 //
 // A recovered panic is labelled with the status the caller actually got, and
 // is then re-panicked so Recovery still logs it and still writes what it
@@ -112,8 +122,10 @@ func Middleware(next http.Handler) http.Handler {
 // is the label; a panic AFTER a partial write means Recovery writes nothing
 // and the client keeps the status already on the wire, so that is the label.
 // Spliced OUTSIDE Recovery instead, this middleware sees no panic at all and
-// the recorder already holds the same answer either way, so the metric does
-// not depend on where in the slice the user put it.
+// the recorder already holds the same answer either way, so the status label
+// does not depend on which side of Recovery the user put it. That is the only
+// placement this paragraph settles: web.Logging is one this middleware must
+// stay BELOW, for the separate reason given above.
 func record(r *http.Request, rec *recorder, start time.Time) {
 	p := recover()
 
@@ -170,6 +182,14 @@ type recorder struct {
 }
 
 func (r *recorder) WriteHeader(status int) {
+	// A 1xx is informational, and the handler still owes the client a real
+	// status. Same condition and same reason as goboot/web's copy, which
+	// carries the argument; #47 fixed both, because either one alone
+	// swallows the final status on the documented wiring.
+	if status >= 100 && status <= 199 && status != http.StatusSwitchingProtocols {
+		r.ResponseWriter.WriteHeader(status)
+		return
+	}
 	if r.wrote {
 		return // net/http already logs the superfluous call
 	}

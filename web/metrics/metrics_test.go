@@ -266,13 +266,19 @@ func TestAPanickingRequestIsCountedAs500(t *testing.T) {
 	wantMore(t, before, route, http.StatusInternalServerError, 1)
 }
 
-// TestItRecordsWhereverItLandsInTheSlice is the claim that makes "append it"
-// a safe instruction. DefaultMiddleware is a slice a user can edit, so this
-// middleware can end up inside Recovery (append) or outside it (splice), and
-// a panicking request must be counted as a 500 either way. Outside Recovery
-// no panic ever reaches this middleware and the recorder sees the real 500;
-// inside it, the defer sees the panic and labels it. The metric is the same.
-func TestItRecordsWhereverItLandsInTheSlice(t *testing.T) {
+// TestItCountsAPanicOnEitherSideOfRecovery is the claim that makes "append
+// it" a safe instruction. DefaultMiddleware is a slice a user can edit, so
+// this middleware can end up inside Recovery (append) or outside it (splice),
+// and a panicking request must be counted as a 500 either way. Outside
+// Recovery no panic ever reaches this middleware and the recorder sees the
+// real 500; inside it, the defer sees the panic and labels it. The metric is
+// the same.
+//
+// Recovery is the only entry this test moves across, and the name says so:
+// #47 renamed it from TestItRecordsWhereverItLandsInTheSlice, which claimed
+// more than it drove. web.Logging is NOT a free placement, and
+// TestTheRouteLabelNeedsThisMiddlewareBelowLogging holds that half.
+func TestItCountsAPanicOnEitherSideOfRecovery(t *testing.T) {
 	const route = "GET /spliced"
 	before := read(t, route, http.StatusInternalServerError)
 
@@ -500,5 +506,67 @@ func TestAPanicAfterAPartialWriteKeepsTheStatusTheClientGot(t *testing.T) {
 	wantMore(t, before200, route, http.StatusOK, 1)
 	if got := read(t, route, http.StatusInternalServerError); got.count != before500.count {
 		t.Errorf("counted as a 500 the client never received: %v became %v", before500.count, got.count)
+	}
+}
+
+// TestTheRouteLabelNeedsThisMiddlewareBelowLogging pins the one placement
+// rule this package has, in the direction that does not flatter it.
+// http.ServeMux fills r.Pattern IN PLACE on the request it routed, and
+// web.Logging hands everything below it a NEW request (r.WithContext), so a
+// middleware spliced ABOVE Logging holds a stale copy and reads an empty
+// route — the series meant for requests that matched nothing.
+// trace.RouteSpanName is innermost in trace.DefaultMiddleware for this exact
+// reason, and says so.
+//
+// The behaviour cannot be widened: the outer request never learns the
+// pattern. So the limitation is pinned here rather than claimed away in
+// prose, and this test fails if it ever changes — which is the point, because
+// then the docs are the thing that is wrong.
+func TestTheRouteLabelNeedsThisMiddlewareBelowLogging(t *testing.T) {
+	const route = "GET /above"
+	before := read(t, route, http.StatusOK)
+	beforeEmpty := read(t, "", http.StatusOK)
+
+	// RequestID, metrics, Logging, Recovery: a legal edit of the slice, and
+	// the one placement the documentation has to warn about.
+	log := discardLog()
+	mw := []web.Middleware{web.RequestID, metrics.Middleware, web.Logging(log), web.Recovery(log)}
+	url := serve(t, mw, route, func(http.ResponseWriter, *http.Request) {})
+	get(t, url+"/above")
+
+	if got := read(t, route, http.StatusOK); got.count != before.count {
+		t.Errorf("route %q was labelled from above web.Logging: %v became %v. "+
+			"If that is now possible the docs are stale, not this test",
+			route, before.count, got.count)
+	}
+	wantMore(t, beforeEmpty, "", http.StatusOK, 1)
+}
+
+// TestAnInformationalStatusIsNotTheFinalOne pins #47 on this package's own
+// copy of the recorder. net/http lets a handler send a 1xx and then the
+// status it really means — Early Hints is exactly that shape — and a recorder
+// that closes over the 1xx labels the metric with a status nobody received
+// and costs the client the status it chose.
+//
+// It is driven through the DOCUMENTED wiring on purpose, so it stays red
+// while EITHER recorder still gets this wrong: web.Logging wraps its own copy
+// around this one, and the outer one swallows the final status first.
+func TestAnInformationalStatusIsNotTheFinalOne(t *testing.T) {
+	const route = "GET /hints"
+	before103 := read(t, route, http.StatusEarlyHints)
+	before204 := read(t, route, http.StatusNoContent)
+
+	url := serve(t, appended(), route, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusEarlyHints)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if resp := get(t, url+"/hints"); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("GET /hints = %d, want 204: the 1xx was taken for the final status", resp.StatusCode)
+	}
+
+	wantMore(t, before204, route, http.StatusNoContent, 1)
+	if got := read(t, route, http.StatusEarlyHints); got.count != before103.count {
+		t.Errorf(`an informational status became a label: {status="103"} moved from %v to %v`,
+			before103.count, got.count)
 	}
 }

@@ -884,13 +884,24 @@ method-bound pattern — the route label reads `GET /users/{id}` — and on the 
 not, the unrouted request above, the method is an arbitrary token the caller chose. It would be the
 only unbounded label left, and it would be unbounded exactly where the scanner traffic is.
 
-**It records in a `defer`, so it is correct wherever the user puts it.** `Use` appends, so the line
-above lands this middleware **inside** `Recovery`, and a panic unwinds past anything written after
-`next()` — the same lesson `goboot/grpc/metrics` learned, and a test fails without the `defer`. A
-recovered panic is labelled with **the status the caller actually got**, and is then re-panicked so
+**It records in a `defer`, so the status label is right on either side of `Recovery`.** `Use`
+appends, so the line above lands this middleware **inside** `Recovery`, and a panic unwinds past
+anything written after `next()` — the same lesson `goboot/grpc/metrics` learned, and a test fails
+without the `defer`. A recovered panic is labelled with **the status the caller actually got**, and
+is then re-panicked so
 `Recovery` still logs it and still writes what it writes. Spliced *outside* `Recovery` instead, no
 panic reaches this middleware and the recorder already holds the same answer.
-`TestItRecordsWhereverItLandsInTheSlice` pins both placements.
+`TestItCountsAPanicOnEitherSideOfRecovery` pins both placements.
+
+**But it must stay BELOW `web.Logging`, and that is a hard rule, not a preference.** `Logging`
+calls `r.WithContext`, which is a new `*http.Request`, and `http.ServeMux` fills `r.Pattern` **in
+place** on the request it routed — so a middleware spliced *above* `Logging` holds a stale copy and
+reads an empty `route`. Every route then collapses onto the series meant for requests that matched
+nothing, which is a dashboard that is wrong rather than coarse. This is the same rule
+[4.6](#46-goboottrace) already states for `trace.RouteSpanName`, which is innermost for it. The
+documented line appends, so it obeys the rule by construction;
+`TestTheRouteLabelNeedsThisMiddlewareBelowLogging` holds it for a user who edits the slice.
+([#47](https://github.com/squall-chua/go-boot/issues/47))
 
 **A panic after a partial write keeps the status already on the wire**, and that is the same
 condition `Recovery` itself branches on: a response that has been written cannot be taken back, so

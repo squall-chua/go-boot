@@ -130,6 +130,11 @@ part of a response before it panicked, the label is the status the client actual
 for the same request. `http.ErrAbortHandler` is passed through uncounted, the same as everywhere
 else.
 
+**Append it — do not splice it above `Logging`.** `Logging` hands everything below it a new request,
+and `ServeMux` fills the route in place on the one it routed, so a middleware above `Logging` reads
+an empty `route` and every route lands on the series meant for requests that matched nothing. The
+line above is safe because `Use` appends.
+
 **Probe paths ARE counted**, unlike the access log. The log skips them because 17,000 lines a day is
 volume; a metric has no volume, a probe is one more series. Exclude them in PromQL if you do not
 want them — nothing recovers a measurement that was never taken, and `/readyz` latency is the time

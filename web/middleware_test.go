@@ -436,3 +436,29 @@ func TestRecoveryLeavesACommittedResponseAlone(t *testing.T) {
 		t.Fatalf("access log = %v, want one line with the 200 that was actually sent", lines)
 	}
 }
+
+// TestAnInformationalStatusIsNotTheFinalOne pins #47. net/http lets a handler
+// send a 1xx and then the status it really means — an Early Hints response is
+// exactly that shape — so the recorder must let the 1xx through without
+// closing over it. Treating it as final costs twice: the 103 is swallowed,
+// the real status never reaches the wire, and net/http writes an implicit 200
+// that neither the handler nor the access line chose.
+func TestAnInformationalStatusIsNotTheFinalOne(t *testing.T) {
+	t.Parallel()
+	sink := newLogSink()
+	url := serve(t, web.DefaultMiddleware(sink.logr), "GET /hints", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusEarlyHints)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if resp := get(t, url+"/hints"); resp.StatusCode != http.StatusNoContent {
+		t.Errorf("GET /hints = %d, want 204: the 1xx was taken for the final status", resp.StatusCode)
+	}
+
+	lines := sink.requests(t)
+	if len(lines) != 1 {
+		t.Fatalf("got %d access-log lines, want exactly 1", len(lines))
+	}
+	if got := lines[0]["status"]; got != float64(http.StatusNoContent) {
+		t.Errorf("access line status = %v, want 204", got)
+	}
+}

@@ -225,6 +225,18 @@ type recorder struct {
 }
 
 func (r *recorder) WriteHeader(status int) {
+	// A 1xx is informational, not an answer: net/http sends it straight out
+	// and the handler still owes the client a real status. The condition is
+	// net/http's own, 101 and all — a Switching Protocols response IS final,
+	// and server.go takes it down the ordinary path. Recording a 1xx costs
+	// twice, both measured in #47: the recorder swallows the status the
+	// handler meant, so the client gets an implicit 200, and the status this
+	// remembers is one nobody received. Leaving wrote false is right too —
+	// nothing final is on the wire, so Recovery may still write its 500.
+	if status >= 100 && status <= 199 && status != http.StatusSwitchingProtocols {
+		r.ResponseWriter.WriteHeader(status)
+		return
+	}
 	if r.wrote {
 		return // net/http already logs the superfluous call; do not double-count
 	}
