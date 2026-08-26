@@ -1890,16 +1890,24 @@ builds both. See [5. The Presets](#5-the-presets-and-what-each-wires).
 > closes with [#32](https://github.com/squall-chua/go-boot/issues/32)**, which replaced the one
 > inline assertion with the whole check of 8.1.
 
-### 8.4 The ten-minute path is compiled
+### 8.4 The README's Go samples are compiled
 
-`docs_test.go` asserts two things about the README's ten-minute path: every Go block on it carries
-a marker naming an example file, and every marked block is still in that file verbatim. Those files
-are compiled by `go build ./...`, so the blocks a newcomer copies are compiled code and drift fails
-the build. See [13. Docs and examples](#13-docs-and-examples).
+`docs_test.go` asserts three things. Two cover the README's ten-minute path: every Go block on it
+carries a marker naming an example file, and every marked block is still in that file verbatim.
+The third covers the reference sections below **Where to go next**: a Go block that is byte for
+byte inside this module's compiled code must carry a marker as well. The files those markers name
+are built by `go build ./...`, so a marked block is compiled code and drift fails the build. See
+[13. Docs and examples](#13-docs-and-examples).
 
 > **Built by [#40](https://github.com/squall-chua/go-boot/issues/40)**, which found the README's
 > `## Use` block had already drifted from `examples/http-only`. It runs under the ordinary
 > `go test ./...` of 8.3 and needs no new CI step.
+
+> **Extended by [#48](https://github.com/squall-chua/go-boot/issues/48)**, which added the third
+> assertion, `TestVerbatimBlocksAreMarked`, and with it the rule that a reference block which *can*
+> be lifted whole has to be. It masks out comments before it looks, so a block found only inside a
+> doc comment earns no marker: nothing compiles it. A marker naming `prototypes/` fails, because
+> that is a separate module CI does not build.
 
 ---
 
@@ -2247,7 +2255,7 @@ it names that file:
 block is still inside the file its marker names, and separately that every Go block *between the
 path's heading and the next one* carries a marker at all. The example files are compiled by
 `go build ./...` and driven by `go test ./...`, so a marked block is compiled code and drift fails
-the build. This is [8.4](#84-the-ten-minute-path-is-compiled).
+the build. This is [8.4](#84-the-readmes-go-samples-are-compiled).
 
 **The second half is the one worth spelling out.** A check that only compares marked blocks makes
 marking optional: dropping one marker, or pasting in a fresh block that never had one, buys silence
