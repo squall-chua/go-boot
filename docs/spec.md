@@ -1890,6 +1890,17 @@ builds both. See [5. The Presets](#5-the-presets-and-what-each-wires).
 > closes with [#32](https://github.com/squall-chua/go-boot/issues/32)**, which replaced the one
 > inline assertion with the whole check of 8.1.
 
+### 8.4 The ten-minute path is compiled
+
+`docs_test.go` asserts two things about the README's ten-minute path: every Go block on it carries
+a marker naming an example file, and every marked block is still in that file verbatim. Those files
+are compiled by `go build ./...`, so the blocks a newcomer copies are compiled code and drift fails
+the build. See [13. Docs and examples](#13-docs-and-examples).
+
+> **Built by [#40](https://github.com/squall-chua/go-boot/issues/40)**, which found the README's
+> `## Use` block had already drifted from `examples/http-only`. It runs under the ordinary
+> `go test ./...` of 8.3 and needs no new CI step.
+
 ---
 
 ## 9. Known gaps in v1
@@ -1973,8 +1984,13 @@ In scope for go-boot, but not in this spec and not blocking the *building* of v1
 **The error-handling convention has left this list.** It was the one item that gated the `v1.0.0`
 tag, and it is settled in
 [4.0. The error convention every Starter follows](#40-the-error-convention-every-starter-follows)
-([#38](https://github.com/squall-chua/go-boot/issues/38)). Nothing left below gates a tag: all five
+([#38](https://github.com/squall-chua/go-boot/issues/38)). Nothing left below gates a tag: all four
 are additive.
+
+**The docs and examples strategy has left this list too.** It is settled in
+[13. Docs and examples](#13-docs-and-examples)
+([#40](https://github.com/squall-chua/go-boot/issues/40)), which fixes the ten-minute path and the
+rule that keeps it from rotting.
 
 - **Security Starter** — authentication, authorization, JWT, OAuth2 resource server, security
   headers. It owns the ground `goboot/web` deliberately left empty. Too large to phrase sharply
@@ -1990,7 +2006,6 @@ are additive.
   the `version` column and the `ddl-auto=validate` CI job. Only the `version` column is
   JPA-specific — the rest is right for everyone, so most of it should be the default rather than a
   flag.
-- **Docs and examples strategy** — how a newcomer learns this in ten minutes.
 
 ---
 
@@ -2100,8 +2115,8 @@ Named here so nobody has to infer them from silence.
 ### The one thing that gates `v1.0.0`
 
 Every item in [11. Deferred past v1](#11-deferred-past-v1) is **additive**: the Security, Messaging
-and Cache Starters are new packages, the Scaffold is a separate binary, and the docs strategy is not
-code. A `v1` minor release can carry any of them.
+and Cache Starters are new packages and the Scaffold is a separate binary. A `v1` minor release
+can carry any of them.
 
 Exactly one item was ever able to change the surface of an existing Starter: the error-handling
 convention ([#38](https://github.com/squall-chua/go-boot/issues/38)). It decided what every Starter
@@ -2162,6 +2177,103 @@ numbers an operator otherwise discovers at scale.
 - **These two numbers, every time**: `/actuator/metrics` answers **404 until `metrics` is named in
   `actuator.expose`**, and **`maxOpenConns: 10` is ten pods** against a stock PostgreSQL, which
   allows about 97 connections.
+
+---
+
+## 13. Docs and examples
+
+Settled by [#40](https://github.com/squall-chua/go-boot/issues/40). This section is the whole
+strategy, and it replaces the *Docs and examples strategy* entry that stood in
+[11. Deferred past v1](#11-deferred-past-v1).
+
+### The rule the whole section comes from
+
+**A doc snippet rots; a build failure does not.** Every Go sample a newcomer is shown is code this
+repository compiles, not prose sitting next to it. That one rule decides everything below.
+
+It had already been paid for once. The `## Use` block in `README.md` said it was the same service
+as `examples/http-only`, and it was not: the block used `log.Fatal` and `HandleFunc` where the
+example used a `run(ctx) error` shape and `Handle`. The two drifted apart and nothing failed,
+because nothing was checking.
+
+### The ten-minute path
+
+One path, three stops, in this order. It sits at the top of `README.md` under **Ten minutes to a
+running service**, above every reference section, so a newcomer meets it before anything else.
+
+| Stop | What it adds | Where the reader ends up running |
+|---|---|---|
+| 1. The smallest service | one Transport and the default middleware, eight wiring lines | `go run ./examples/http-only`, then `curl localhost:8080/hello/world` |
+| 2. The Actuator and config | the operational endpoints and the service's own config key, fourteen wiring lines | `go run ./examples/http-actuator-config`, then `curl localhost:8080/readyz` and `/actuator/metrics` |
+| 3. The whole surface | HTTP, gRPC, database and tracing, wired by one call to a Preset | `go run ./examples/full`, and `go run ./examples/full explicit` for the same service wired by hand |
+
+The three stops are the three example directories [#19](https://github.com/squall-chua/go-boot/issues/19)
+already scoped, in the order [6. The `main.go` a developer writes](#6-the-maingo-a-developer-writes)
+already puts them. **No fourth directory and no tutorial living outside them**: a second place to
+learn go-boot is a second place to go stale.
+
+**Every stop ends in a command, not a paragraph.** The path is measured by where the reader gets
+to, so a stop that does not finish with something running is not a stop.
+
+**Stop 3 needs a PostgreSQL and says so.** `examples/full/app.yaml` points `db.dsn` at a throwaway
+local one, so the reader is not asked to invent a DSN before anything runs.
+
+The two numbers of [What every release note carries](#what-every-release-note-carries) are said
+on the path as well, each at the stop where it bites: the metrics whitelist at stop 2, and
+`maxOpenConns: 10` at stop 3.
+
+### Every sample on the path is compiled
+
+A code block on the path is **lifted verbatim** out of an example file, and an HTML comment above
+it names that file:
+
+    <!-- from: examples/http-only/main.go -->
+    ```go
+    func run(ctx context.Context) error {
+    	app, err := goboot.New(goboot.Config{})
+    	...
+    }
+    ```
+
+`docs_test.go` checks this in two halves, and **both are needed**. It asserts that every marked
+block is still inside the file its marker names, and separately that every Go block *between the
+path's heading and the next one* carries a marker at all. The example files are compiled by
+`go build ./...` and driven by `go test ./...`, so a marked block is compiled code and drift fails
+the build. This is [8.4](#84-the-ten-minute-path-is-compiled).
+
+**The second half is the one worth spelling out.** A check that only compares marked blocks makes
+marking optional: dropping one marker, or pasting in a fresh block that never had one, buys silence
+rather than a failure. So the path's Go blocks are found by position and the marker is required of
+each, which is the difference between a rule and a habit. Renaming the path's heading fails too,
+because an empty range would otherwise pass with nothing checked.
+
+**Verbatim means byte for byte, tabs included.** There is no fuzzy match and no whitespace
+tolerance: a check that forgives small differences is a check that lets a wrong snippet through,
+and the rot it was written to catch starts small.
+
+The shell blocks holding the `go run` and `curl` lines carry no marker and are **not** checked.
+They are commands, not samples lifted from a file, so there is nothing to lift them from. This is
+the one gap on the path, and it is named here rather than left for a reader to notice.
+
+### What is not on the path, and why that is right
+
+Everything below **Where to go next** in `README.md` is reference: the default middleware, the
+Actuator, gRPC, tracing, the database and the Preset. Those sections quote single lines and
+fragments to make a point, and a fragment has no file it can be lifted from whole.
+
+They carry no marker and no guarantee, and `README.md` **says so out loud** rather than leaving the
+reader to work out which code is checked. Marking a fragment would mean reshaping the prose around
+what the checker can verify, which is the wrong way round. The path gets the guarantee because the
+path is what a newcomer copies.
+
+### The other three documents
+
+None is on the ten-minute path, and this section does not change any of them.
+
+- `docs/spec.md` — the design authority. Read by whoever changes go-boot, not by a newcomer.
+- `CONTEXT.md` — the vocabulary. A newcomer meets Starter, Preset, Component and Tier in the
+  README as they go; this file is where each definition lives.
+- `docs/adr/` — one decision per file, read when someone asks why go-boot is like this.
 
 ---
 

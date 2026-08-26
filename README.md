@@ -24,47 +24,142 @@ Scaffold, which that spec defers past v1.
 go get github.com/squall-chua/go-boot
 ```
 
-## Use
+## Ten minutes to a running service
 
+Three stops, in order. Each one is a directory in this repository you can run right now, and every
+Go block below is lifted **verbatim** from the file CI compiles. A test fails if a block drifts from
+its file, and it fails again if a Go block appears here without one. Nothing on this path goes
+stale on you.
+
+### 1. The smallest service — two minutes
+
+One Transport, the default middleware, nothing else.
+
+<!-- from: examples/http-only/main.go -->
 ```go
-package main
-
-import (
-	"context"
-	"log"
-	"net/http"
-
-	"github.com/squall-chua/go-boot"
-	"github.com/squall-chua/go-boot/web"
-)
-
-func main() {
+func run(ctx context.Context) error {
 	app, err := goboot.New(goboot.Config{})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
-
 	srv, err := web.New(web.Config{Addr: ":8080"}, app.Log)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	srv.Use(web.DefaultMiddleware(app.Log)...)
-	srv.HandleFunc("GET /hello", func(w http.ResponseWriter, r *http.Request) {
-		web.WriteJSON(w, http.StatusOK, map[string]string{"hello": "world"})
-	})
 	app.Add(srv)
 
-	if err := app.Run(context.Background()); err != nil {
-		log.Fatal(err)
-	}
+	srv.Handle("GET /hello/{name}", http.HandlerFunc(hello))
+
+	return app.Run(ctx)
 }
 ```
 
-`examples/http-only` is this same service as a file you can run.
+```
+go run ./examples/http-only
+curl localhost:8080/hello/world
+```
+
+`hello` in the same file is an ordinary `http.HandlerFunc`. go-boot has no handler type of its own,
+so everything written for `net/http` works here unchanged.
 
 `app.Add` ignores the order you write. Each Component declares its own Tier, and go-boot starts
 from the lowest Tier to the highest and stops in reverse. So wiring in the wrong order is not a
 mistake you can make.
+
+### 2. Add the Actuator and config — four minutes
+
+The realistic default: the same Transport, plus the operational endpoints and the service's own
+config key beside go-boot's.
+
+<!-- from: examples/http-actuator-config/main.go -->
+```go
+func run(ctx context.Context) error {
+	cfg := config{Greeting: "hello"} // the struct pre-fill IS the defaults layer
+	if err := goboot.Load(defaultsFS, "app.yaml", "ORDERS_", &cfg); err != nil {
+		return err
+	}
+	app, err := goboot.New(goboot.Config{Log: cfg.Log, Lifecycle: cfg.Lifecycle})
+	if err != nil {
+		return err
+	}
+	act, err := actuator.New(cfg.Actuator, app)
+	if err != nil {
+		return err
+	}
+	srv, err := web.New(cfg.Web, app.Log)
+	if err != nil {
+		return err
+	}
+	srv.Use(web.DefaultMiddleware(app.Log)...)
+	act.MountOn(srv)
+	app.Add(act, srv)
+
+	srv.Handle("GET /hello/{name}", greet(cfg.Greeting))
+
+	return app.Run(ctx)
+}
+```
+
+```
+go run ./examples/http-actuator-config
+curl localhost:8080/readyz
+curl localhost:8080/actuator/metrics
+curl -X PUT localhost:8080/actuator/loglevel -d '{"level":"DEBUG"}'
+```
+
+**Metrics answer 404 until you name them.** The `actuator.expose` list in
+`examples/http-actuator-config/app.yaml` is a whitelist. Drop `metrics` from it and the endpoint is
+never registered at all. This is the one thing that surprises people, so it is said here rather
+than further down.
+
+### 3. The whole surface — four minutes
+
+HTTP, gRPC, database, Actuator and tracing, wired by one call to a Preset.
+
+<!-- from: examples/full/main.go -->
+```go
+func run(ctx context.Context) error {
+	var cfg config
+	if err := goboot.Load(defaultsFS, "app.yaml", "ORDERS_", &cfg); err != nil {
+		return err
+	}
+	app, err := traced.Full(cfg.Config, migrations())
+	if err != nil {
+		return err
+	}
+
+	svc := &greeter{db: app.DB, greeting: cfg.Greeting}
+	app.Web.Handle("GET /hello/{name}", httpGreet(svc))
+	// grpc.DefaultOptions is here and not inside the Preset, in both forms:
+	// the mount names the user's own generated package. Leave it off and the
+	// error sanitiser goes with it.
+	app.Web.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+
+	return app.Run(ctx)
+}
+```
+
+This stop needs a PostgreSQL, because it runs migrations and opens a pool. `examples/full/app.yaml`
+points `db.dsn` at a throwaway one on `localhost:5432`; send a real password in `ORDERS_DB__DSN`
+instead, which is the layer that wins.
+
+```
+go run ./examples/full            # the Preset form, main.go
+go run ./examples/full explicit   # the same service wired by hand, explicit.go
+```
+
+`explicit.go` is exactly what `traced.Full` expands to. Copying that body is the only way to change
+what a Preset wires, so the copy ships as compiling code and one test drives both forms.
+
+**`maxOpenConns` defaults to 10.** That is ten pods against a stock PostgreSQL, which allows about
+97 connections. Read the pool defaults below before you run more than ten.
+
+### Where to go next
+
+Everything below is reference, read as you need it: the default middleware, the Actuator, gRPC,
+tracing, the database and the Preset. Those sections quote fragments and single lines rather than
+whole wiring, so they are not part of the checked path above.
 
 ## The default middleware
 
