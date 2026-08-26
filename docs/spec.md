@@ -2535,11 +2535,14 @@ The same five steps for every tag, `v0` and `v1` alike.
 
 ### What every release note carries
 
-The first four are per-release. The last is on **every** note, unchanged, because these are the two
+The first five are per-release. The last is on **every** note, unchanged, because these are the two
 numbers an operator otherwise discovers at scale.
 
 - **Every break**, with the line a user has to change. On a `v1` release this list is empty by
   definition; if it is not, the tag is wrong.
+- **Every package added to the public surface**, with the one line saying when to reach for it. A
+  package arriving breaks nothing, so the bullet above never names it, and a user who reads only the
+  note learns that a version shipped and not that a Starter did.
 - **Every Preset body change**, because a Preset user's wiring changed without their `main` changing.
 - **Every gap of §9 that was closed**, plus the §9 list as it still stands. The remaining gaps ship
   with the release; they belong in the note, not in a file the operator finds afterwards.
@@ -2547,6 +2550,20 @@ numbers an operator otherwise discovers at scale.
 - **These two numbers, every time**: `/actuator/metrics` answers **404 until `metrics` is named in
   `actuator.expose`**, and **`maxOpenConns: 10` is ten pods** against a stock PostgreSQL, which
   allows about 97 connections.
+
+> **The second bullet was added after [#34](https://github.com/squall-chua/go-boot/issues/34).** The
+> gap was found by asking which of the five original bullets obliged a note to mention
+> `goboot/security`, and finding that none did: the list was five kinds of **change to something
+> that already exists**, and had no entry for something arriving. It is the same shape as the hole
+> [#44](https://github.com/squall-chua/go-boot/issues/44) exists for, and it is recorded there too.
+>
+> **The mechanism of [8.1](#81-the-import-leak-check) does not reach this far, and that is the
+> point.** A new package fails CI until `.github/module-counts.txt` is regenerated, and the rule
+> above says whoever regenerates it updates the fifteen names in this section too. Both of those end
+> inside this repository. Nothing carried the fact into a release note until this bullet did.
+>
+> The count in the sentence above this list is written out, so it moves whenever the list does — the
+> same trap [8.1](#81-the-import-leak-check) names about its own.
 
 ---
 
