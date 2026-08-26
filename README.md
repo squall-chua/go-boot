@@ -257,7 +257,7 @@ key set, and per-route scope checks. A service that does not import it links non
 ```yaml
 security:
   headers:
-    hstsMaxAge: 180d # 0, which is off, is the default
+    hstsMaxAge: 4320h # 180 days. Go durations have no "d" unit
   cors:
     allowedOrigins: [https://app.example.com]
   jwt:
