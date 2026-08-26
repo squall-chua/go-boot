@@ -655,22 +655,10 @@ PostgreSQL 18.3. Set `GOBOOT_PG_BINARIES` to a pre-seeded directory to run air-g
 `preset.Full` wires a whole service in one call: the App, the database pool, the Actuator, the HTTP
 Server and the default middleware. `traced.Full` is the same with tracing.
 
-```go
-var cfg config
-if err := goboot.Load(defaultsFS, "app.yaml", "ORDERS_", &cfg); err != nil {
-	return err
-}
-app, err := traced.Full(cfg.Config, migrations())
-if err != nil {
-	return err
-}
-
-svc := &greeter{db: app.DB, greeting: cfg.Greeting}
-app.Web.Handle("GET /hello/{name}", httpGreet(svc))
-app.Web.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
-
-return app.Run(ctx)
-```
+The call is [stop 3 of the ten-minute path](#3-the-whole-surface--four-minutes) above, and it is not
+repeated here. That block is checked against `examples/full/main.go`; a second copy on this page
+would not be, and an unchecked copy of wiring is what this section spends the rest of its words
+warning about.
 
 **The reason to use it is the upgrade path, not the size of the diff.** Wiring held in a Preset gets
 fixed by `go get -u`; wiring held in your own `main` does not. If go-boot later learns that a fourth
@@ -688,7 +676,7 @@ the first place. A user who copies has chosen to own their wiring, exactly as if
 a Preset. That is the trade and it is not softened here.
 
 Because copying is the only escape hatch, the copy ships as compiling code rather than as a snippet
-in this file. `examples/full/main.go` is the Preset form above; `examples/full/explicit.go` is
+in this file. `examples/full/main.go` is the Preset form of stop 3; `examples/full/explicit.go` is
 exactly what `traced.Full` expands to. CI builds both, and one test drives both and asserts they
 serve the same service.
 
