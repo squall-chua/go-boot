@@ -159,12 +159,14 @@ this runs — that is the one escape, and it is the operator's, not go-boot's.
 
 So `Drain` means *stop taking new work*, and nothing else. A Component that must wait for work in
 flight waits in `Stop`, which has a real budget, and gives up when that budget expires. That is
-already how the fifteen packages behave: the Actuator is the only `Drainer` in the repository and
-its whole `Drain` is one flag store, `goboot/web` implements no `Drainer` and lets go of
-connections in `Stop` through `http.Server.Shutdown`, and `goboot/grpc` is not a Component at all
-([4.4](#44-gobootgrpc--the-grpc-transport-starter) — it owns no server and mounts on the HTTP
-Starter's listener). [14](#14-the-messaging-starter-specified-and-post-v1) designs the consumers to
-the same rule.
+already how the seventeen packages behave. There are three `Drainer`s in the repository and not one
+of them waits: the Actuator's whole `Drain` is one flag store, `goboot/kafka` stops its own client
+fetching, and `goboot/rabbit` cancels its consumer so the broker stops sending. Both return at once
+and leave the waiting to `Stop`
+([14](#14-the-messaging-starter-specified-and-in-the-v1-promise)). `goboot/web` implements no
+`Drainer` and lets go of connections in `Stop` through `http.Server.Shutdown`, and `goboot/grpc` is not a
+Component at all ([4.4](#44-gobootgrpc--the-grpc-transport-starter) — it owns no server and mounts
+on the HTTP Starter's listener).
 
 > **Why the interface is not changed instead.** #49 weighed a `lifecycle.drainTimeout` and a
 > `Drain(ctx) error`. Neither bounds a `Drain` that ignores its context, because step 4 calls it
@@ -323,9 +325,18 @@ Write these in the config documentation as choices, so nobody files them as gaps
 
 ## 4. The public API of every v1 Starter
 
-**There are six Starters: base, actuator, web, grpc, db, trace.** Plus five optional subpackages
-that exist only to hold a dependency: `goboot/grpc/health`, `goboot/grpc/metrics`,
-`goboot/grpc/reflection`, `goboot/trace/rpc`, `goboot/db/dbtest`.
+**There are nine Starters: base, actuator, web, grpc, db, trace, security, kafka, rabbit.** Plus
+six optional subpackages that exist only to hold a dependency: `goboot/grpc/health`,
+`goboot/grpc/metrics`, `goboot/grpc/reflection`, `goboot/trace/rpc`, `goboot/db/dbtest`,
+`goboot/web/metrics`. The last two Starters are specified in
+[14. The Messaging Starter](#14-the-messaging-starter-specified-and-in-the-v1-promise) rather than
+in a `4.x` section, and [#50](https://github.com/squall-chua/go-boot/issues/50) put them in the
+`v1` promise with the rest.
+
+That is fifteen of the seventeen packages
+[12. Versioning and release policy](#12-versioning-and-release-policy) promises. The other two are
+`goboot/preset` and `goboot/preset/traced`, which are neither: a Preset wires Starters rather than
+being one ([5. The Presets](#5-the-presets-and-what-each-wires)).
 
 ### 4.0 The error convention every Starter follows
 
@@ -339,7 +350,7 @@ that HTTP and gRPC got one answer rather than two that disagree. This is the sec
 #### There is no go-boot error type, and no go-boot sentinel
 
 A Starter returns a plain `error`, built with `errors.New` or `fmt.Errorf`. There is no
-`goboot.Error`, no `goboot.ErrConfig`, and no exported sentinel in any of the fifteen packages.
+`goboot.Error`, no `goboot.ErrConfig`, and no exported sentinel in any of the seventeen packages.
 
 A caller who needs to branch matches on the sentinel belonging to whoever produced the fault —
 `sql.ErrNoRows`, `fs.ErrNotExist`, `http.MaxBytesError` — with `errors.Is` or `errors.As`. It never
@@ -371,7 +382,7 @@ The key path is the one that matters, because it is the only locator that tells 
 line of which YAML file to edit. `actuator.expose: no endpoint named "metric"` was already written
 this way and is the model the rest were brought to.
 
-There is no bare message with no locator in the fourteen packages a service links. The fifteenth,
+There is no bare message with no locator in the sixteen packages a service links. The seventeenth,
 `goboot/db/dbtest`, is exempt and is the only one: every one of its exports takes a `testing.TB`
 and calls `Fatal` on it, so none of its text ever reaches a `main` — its messages name the check
 that failed rather than a config key, and that is right for a test helper.
@@ -395,7 +406,7 @@ below: go-boot is the handler here, and it wrote those words.
 **A constructor validates its own config and returns `(T, error)`. `Start` reports only what needs
 the world.**
 
-All fifteen public packages are below, so the rule can be checked rather than believed. Every one
+All seventeen public packages are below, so the rule can be checked rather than believed. Every one
 that has config to validate follows it; the rest are listed with the reason they have nothing to
 validate, because "not applicable" and "overlooked" look identical in a shorter table:
 
@@ -408,6 +419,8 @@ validate, because "not applicable" and "overlooked" look identical in a shorter 
 | `goboot/security` | a `security.jwt` section missing `issuer` or `audience`; naming none or more than one of `jwksUrl`, `jwksFile` and `publicKeyFile`; a `jwksUrl` on plain `http` outside loopback; a key file that is missing, unreadable or not an RSA/ECDSA public key; and `security.cors` allowing `*` with credentials, or setting `allowCredentials` with no origins | — no Component. The two file sources are read here; `jwksUrl` is fetched lazily, on the first token |
 | `goboot/db` | a `db.driver` with no goose dialect, and `sql.Open` | reaching the database, pending migrations |
 | `goboot/trace` | a `trace.sampleRatio` outside 0..1 | building the exporter |
+| `goboot/kafka` | an empty `kafka.brokers` or one holding an empty entry, a missing `kafka.topic` or `kafka.group`, a `kafka.sasl` naming a mechanism without a username and password, an unknown mechanism name, and a nil `Handler` | the client refusing the options, and reaching the brokers |
+| `goboot/rabbit` | a missing `rabbit.url` or one whose scheme is neither `amqp://` nor `amqps://`, a missing `rabbit.queue`, a negative `rabbit.prefetch`, and a nil `Handler` | dialling the broker, and `rabbit.queue` not being on it |
 | `goboot/preset`, `goboot/preset/traced` | nothing of their own — they return the first error the constructors above give them | — |
 | `goboot/trace/rpc` | `rpc.Options` returns what `otelconnect` refuses | — |
 | `goboot/grpc`, `goboot/grpc/health`, `goboot/grpc/metrics`, `goboot/grpc/reflection` | nothing: no config, no Component, no constructor that can fail. `metrics.Options` registers at package init, so it has no error to give | — |
@@ -2145,7 +2158,7 @@ pinning.
 | `github.com/fergusstrange/embedded-postgres` | v1.34.0 | `goboot/db/dbtest` | [#13](https://github.com/squall-chua/go-boot/issues/13) | 3 linked modules against `testcontainers-go`'s 45, and no Docker daemon. Real PostgreSQL 18.3 up in 2.77s |
 | `github.com/twmb/franz-go` | v1.21.6 | `goboot/kafka` | [#35](https://github.com/squall-chua/go-boot/issues/35) | **4 linked modules**, +7,352,423 bytes stripped — the second-largest entry in this table, and the one row where module count beat size. `segmentio/kafka-go` is 3 modules and 2.51 MB lighter but is still `v0.4.x` after years, and a `v0` under go-boot's own `v1` promise inherits "may break anything" permanently; `IBM/sarama` is 15 modules including a Kerberos stack and `go-spew`; `confluent-kafka-go` **does not compile with `CGO_ENABLED=0`**, measured. SASL and TLS cost **no extra module and 57,344 bytes**, so the count above is the whole price |
 | `github.com/twmb/franz-go/pkg/kmsg` | v1.13.1 | `goboot/kafka` (indirect) | [#35](https://github.com/squall-chua/go-boot/issues/35) | **Nobody chose this one; it arrives.** franz-go splits its Kafka protocol types into a second module, so the client's 4 is 2 of its own plus `klauspost/compress` and `pierrec/lz4` |
-| `github.com/rabbitmq/amqp091-go` | v1.14.0 | `goboot/rabbit` | [#35](https://github.com/squall-chua/go-boot/issues/35) | **1 linked module with zero transitive dependencies**, +3,825,767 bytes stripped. The RabbitMQ team's own continuation of `streadway/amqp`, and the only `v1` client for AMQP 0-9-1 in Go — there was no close call to weigh, unlike the Kafka side. Most of the size is `crypto/tls`, which stops being dead code the moment a connection is encrypted. Its `Config.Recovery` auto-reconnect is **not** used: it is opt-in and marked Experimental upstream, and [14](#14-the-messaging-starter-specified-and-post-v1) explains why a `v1` promise is not built on that |
+| `github.com/rabbitmq/amqp091-go` | v1.14.0 | `goboot/rabbit` | [#35](https://github.com/squall-chua/go-boot/issues/35) | **1 linked module with zero transitive dependencies**, +3,825,767 bytes stripped. The RabbitMQ team's own continuation of `streadway/amqp`, and the only `v1` client for AMQP 0-9-1 in Go — there was no close call to weigh, unlike the Kafka side. Most of the size is `crypto/tls`, which stops being dead code the moment a connection is encrypted. Its `Config.Recovery` auto-reconnect is **not** used: it is opt-in and marked Experimental upstream, and [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) explains why a `v1` promise is not built on that |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 | `goboot/security` | [#34](https://github.com/squall-chua/go-boot/issues/34) | **1 linked module with zero transitive dependencies**, +36 KB on its own — measured against `go-jose/v4` at 1 module and +495 KB and `coreos/go-oidc/v3` at 3 modules and +1.17 MB. Wiring the Starter costs **+708,608 bytes**, mostly stdlib crypto that stops being dead code once something verifies a signature; [4.7](#47-gobootsecurity--the-security-starter) has both numbers and why they differ. It ships no JWKS client, so `goboot/security` writes one over `crypto/rsa` and `crypto/ecdsa` |
 
 **No database driver is linked by a go-boot Starter.** The user blank-imports their own.
@@ -2425,17 +2438,21 @@ introspection are additions to `goboot/security`, listed at the end of 4.7.
 ([#40](https://github.com/squall-chua/go-boot/issues/40)), which fixes the ten-minute path and the
 rule that keeps it from rotting.
 
-**The Messaging Starter has left this list, without joining v1.** It is specified in
-[14. The Messaging Starter](#14-the-messaging-starter-specified-and-post-v1)
+**The Messaging Starter has left this list, and has since joined v1.** It is specified in
+[14. The Messaging Starter](#14-the-messaging-starter-specified-and-in-the-v1-promise)
 ([#35](https://github.com/squall-chua/go-boot/issues/35)): two Starters rather than one, `goboot/kafka`
 over franz-go and `goboot/rabbit` over `amqp091-go`. It is the first entry to leave for a section
-outside [4](#4-the-public-api-of-every-v1-starter), and the distinction is the point — the design is
-settled, the fifteen packages are unchanged, and it ships after `v1.0.0`. Specifying it also added
-a condition this bullet did not have. A consumer is still the named user of `Drainer`, but its
-`Drain` **cannot be the thing that waits for in-flight work**: `Run` hands every `Drain` a context
+outside [4](#4-the-public-api-of-every-v1-starter). It left in two steps, and the gap between them
+is worth keeping: for one ticket the design was settled and both packages were in the module, but
+[12](#12-versioning-and-release-policy)'s list still read fifteen and this bullet still said the
+Starter ships after `v1.0.0`. [#50](https://github.com/squall-chua/go-boot/issues/50) closed that by
+putting both names in the list, so §12 now reads seventeen and every exported identifier in them is
+frozen for the life of `v1`. Specifying it also added a condition this bullet did not have. A
+consumer is still the named user of `Drainer`, but its `Drain` **cannot be the thing that waits for
+in-flight work**: `Run` hands every `Drain` a context
 with no deadline that nothing can cancel, so a `Drain` that waits hangs the whole shutdown with
 nothing able to interrupt it. The waiting moves to `Stop`, which has a real budget.
-[14](#14-the-messaging-starter-specified-and-post-v1) has the code references and the consequences.
+[14](#14-the-messaging-starter-specified-and-in-the-v1-promise) has the code references and the consequences.
 
 - **Cache / Redis Starter** — likely a thin wiring Starter; unclear whether it earns its place.
 - **Scaffold CLI design** — commands, flags, what it writes, how thin the generated `main` stays.
@@ -2456,7 +2473,7 @@ policy: follow it and a tag can be cut with nothing left to decide.
 ### One tag covers every Starter
 
 go-boot is **one Go module** ([1. Ground rules](#1-ground-rules)), so there is **one tag**, and it
-covers all fifteen packages at once. A fix in `goboot/db` bumps the version number a root-only user
+covers all seventeen packages at once. A fix in `goboot/db` bumps the version number a root-only user
 sees, even though nothing they import changed. That is the price of the one-module layout, and
 [#3](https://github.com/squall-chua/go-boot/issues/3) measured it as small: a root-only consumer
 downloads 1 zip and 2.9 KB, so the upgrade they did not need is an upgrade they barely pay for.
@@ -2465,31 +2482,47 @@ The reverse also holds, and it is the part to say out loud: **a user cannot pin 
 older version than another.** There is one version number for the whole library. Anyone who needs
 otherwise is asking for the multi-module layout #3 refused.
 
-### The public surface is these fifteen packages
+### The public surface is these seventeen packages
 
 `goboot`, `goboot/actuator`, `goboot/web`, `goboot/web/metrics`, `goboot/grpc`,
 `goboot/grpc/health`, `goboot/grpc/metrics`, `goboot/grpc/reflection`, `goboot/db`,
-`goboot/db/dbtest`, `goboot/trace`, `goboot/trace/rpc`, `goboot/preset`, `goboot/preset/traced`
-and `goboot/security`, the last added by
-[#34](https://github.com/squall-chua/go-boot/issues/34).
+`goboot/db/dbtest`, `goboot/trace`, `goboot/trace/rpc`, `goboot/preset`, `goboot/preset/traced`,
+`goboot/security`, `goboot/kafka` and `goboot/rabbit`. `goboot/security` was added by
+[#34](https://github.com/squall-chua/go-boot/issues/34), and the last two by
+[#50](https://github.com/squall-chua/go-boot/issues/50).
 Every exported identifier in them is covered by the promise below. `goboot/db/dbtest` is on the
 list and not an afterthought: go-boot's own tests use it, so it is shipped code a user may
 reasonably build on.
 
-> **`goboot/rabbit` and `goboot/kafka` are in the module and are not in the list above, and that is
-> an open question rather than an oversight.** [#35](https://github.com/squall-chua/go-boot/issues/35) built it while
-> the line is still `v0.x`, where "a minor bump may break anything, and is also how anything is
-> added", so shipping it now costs nobody a promise.
-> [14](#14-the-messaging-starter-specified-and-post-v1) says the Messaging Starter ships *after*
-> `v1.0.0`, and the two cannot both hold at the tag: a package sitting in the module with no
-> mechanism excluding it **is** surface the moment `v1.0.0` is cut. The three exclusions below are
-> `internal/`, `examples/` and `prototypes/`, and a Starter is none of them.
+> **`goboot/kafka` and `goboot/rabbit` are on that list by a decision, and the decision is
+> [#50](https://github.com/squall-chua/go-boot/issues/50).**
+> [#35](https://github.com/squall-chua/go-boot/issues/35) built both while the line was still
+> `v0.x`, where "a minor bump may break anything, and is also how anything is added", so shipping
+> them then cost nobody a promise. It left one question behind:
+> [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) said the Messaging Starter ships *after*
+> `v1.0.0`, and this list is what `v1.0.0` promises, and the two could not both hold at the tag. A
+> package sitting in the module with no mechanism excluding it **is** surface the moment `v1.0.0` is
+> cut — the three exclusions below are `internal/`, `examples/` and `prototypes/`, and a Starter is
+> none of them. There were two answers and no third: both join the promise, or the tag waits until
+> they are ready to be frozen.
 >
-> So whoever cuts `v1.0.0` decides one of two things, and must decide it deliberately: either both
-> join the promise and this heading reads seventeen, or the tag waits until they are ready to. There
-> is no third option where they ship uncovered. Named here because the golden file already carries
-> both rows, and the rule below says whoever updates that updates this list — this note is that
-> update, held one step short of a number nobody has chosen yet.
+> **#50 chose the first, and what that costs is on the record rather than in a shrug.** Neither
+> Starter has met a real broker. Their shutdown behaviour is proven against fake fetch loops, which
+> is the right test for what [#49](https://github.com/squall-chua/go-boot/issues/49) settled and
+> says nothing about rebalancing, redelivery under load, or a coordinator moving mid-commit.
+> [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) also still names one unmeasured claim:
+> franz-go was chosen over `segmentio/kafka-go` on version line and module count, and the
+> consumer-group correctness comparison needs a real cluster and has not been run. **Every one of
+> those is now a bug to fix inside `v1` rather than a signature to change**, because the signatures
+> are frozen. That is the trade, and it was made deliberately.
+>
+> **The `v1.0.0` release note names both packages**, under the second bullet of
+> [what every release note carries](#what-every-release-note-carries). A package arriving breaks
+> nothing, so nothing else in that note would mention them, and without that bullet a user who
+> reads only the note would learn that a version shipped and not that two Starters did. **The note
+> also carries what this one says about them**, because the release note names the gaps of
+> [9. Known gaps in v1](#9-known-gaps-in-v1) as they stand and neither Starter having met a real
+> broker is not on that list.
 
 Three things in the repository are **not** surface, and each is excluded by a mechanism rather than
 by a sentence, so it cannot drift. `internal/` is excluded by the Go compiler. `examples/` are
@@ -2503,11 +2536,16 @@ dashboard breaks on a renamed JSON field exactly as a compile breaks on a rename
 A new package cannot appear unnoticed: `.github/check-imports.sh` reads the package list from
 `go list ./...` and pins one row per package in `.github/module-counts.txt`, regenerated only by
 `--update`, so **a new package fails CI until someone updates the golden file**
-([8.1](#81-the-import-leak-check)). Nothing ties that file to the fifteen names written above,
+([8.1](#81-the-import-leak-check)). Nothing ties that file to the seventeen names written above,
 though, so **whoever updates it updates this list in the same commit.** #41 is the first change to
 test that rule, and it held: `goboot/grpc/metrics` went into the list and the golden file
 together. [#45](https://github.com/squall-chua/go-boot/issues/45) is the second, and it held the
 same way: `goboot/web/metrics` and the row `goboot/web/metrics 9 11`, one commit.
+[#35](https://github.com/squall-chua/go-boot/issues/35) is the third, and it is the one that
+**broke**: the golden file gained both consumer rows and this list stayed at fifteen. It was not
+carelessness — the note below says why the number could not simply follow — but the rule was still
+broken for the length of one ticket, and [#50](https://github.com/squall-chua/go-boot/issues/50)
+is what repaired it. A rule with an exception nobody wrote down is a rule that fails silently the next time.
 
 ### The line before v1 is `v0.x`
 
@@ -2525,7 +2563,7 @@ it ends as soon as that reason does.
 
 Once `v1.0.0` is cut, for the whole life of `v1`:
 
-- **No exported identifier in the fifteen packages is removed or renamed, and no function or method
+- **No exported identifier in the seventeen packages is removed or renamed, and no function or method
   signature changes.**
 - **No config key is removed or renamed, and no default value changes.** `maxOpenConns` is still
   `10` on the last `v1` release. A silently improved default moves a production knob its owner
@@ -2577,7 +2615,7 @@ can carry any of them.
 Exactly one item was ever able to change the surface of an existing Starter: the error-handling
 convention ([#38](https://github.com/squall-chua/go-boot/issues/38)). It decided what every Starter
 returns on misconfiguration and whether a go-boot error type exists at all — a signature question
-across all fifteen packages. Freezing the surface before it landed would have frozen it wrong, and
+across all seventeen packages. Freezing the surface before it landed would have frozen it wrong, and
 the only way out of that is a `v2` on a library that has barely shipped.
 
 So the gate was one sentence, and it was checkable rather than a judgement call:
@@ -2645,7 +2683,7 @@ numbers an operator otherwise discovers at scale.
 >
 > **The mechanism of [8.1](#81-the-import-leak-check) does not reach this far, and that is the
 > point.** A new package fails CI until `.github/module-counts.txt` is regenerated, and the rule
-> above says whoever regenerates it updates the fifteen names in this section too. Both of those end
+> above says whoever regenerates it updates the seventeen names in this section too. Both of those end
 > inside this repository. Nothing carried the fact into a release note until this bullet did.
 >
 > The count in the sentence above this list is written out, so it moves whenever the list does — the
@@ -2792,15 +2830,23 @@ None is on the ten-minute path, and this section does not change any of them.
 
 ---
 
-## 14. The Messaging Starter, specified and post-v1
+## 14. The Messaging Starter, specified and in the v1 promise
 
-Specified by [#35](https://github.com/squall-chua/go-boot/issues/35). It has its own section rather
-than a `4.x` one because [4. The public API of every v1 Starter](#4-the-public-api-of-every-v1-starter)
-is tied to the fifteen packages
-[12. Versioning and release policy](#12-versioning-and-release-policy) promises, and messaging is
-not one of them. [11. Deferred past v1](#11-deferred-past-v1) called it "specifiable now, but not a
-v1 Starter", and both halves of that sentence are still true: the design below is settled, and it
-ships after `v1.0.0`.
+Specified by [#35](https://github.com/squall-chua/go-boot/issues/35). **Both packages are inside the
+`v1` promise**, settled by [#50](https://github.com/squall-chua/go-boot/issues/50): `goboot/kafka`
+and `goboot/rabbit` are two of the seventeen packages
+[12. Versioning and release policy](#12-versioning-and-release-policy) lists, so every exported
+identifier below is frozen for the life of `v1`. Read this section under that rule,
+exactly like a `4.x` one. §12's note carries what the decision cost, and it was not free: neither
+Starter has met a real broker, so the first bug found against one is a bug to fix rather than a
+signature to change.
+
+It keeps its own section rather than becoming `4.8` and `4.9`, for the reason it was written that
+way: this is one design covering two packages, and the parts a reader needs together — why there is
+no `goboot/messaging` parent, why the two `Message` types differ, and what `Drain` may not do — sit
+above either package rather than inside one. [11. Deferred past v1](#11-deferred-past-v1) called it
+"specifiable now, but not a v1 Starter". The first half held. The second did not, and #50 is where
+it stopped being true.
 
 ### It is two Starters, not one with two backends
 
@@ -3025,9 +3071,11 @@ specifying one surfaces a hole in that interface that nothing has stood in yet.
 `Drain` that blocks blocks the whole shutdown, with neither the drain delay nor `stopTimeout` able
 to cut it short — both come later. Only a second signal escapes, and that is the operator's doing.
 
-**This has never mattered, because go-boot ships exactly one `Drainer`.** Grep the repository: the
-only `Drain` outside tests and `prototypes/` is `actuator/actuator.go`, and its whole body is
-`a.draining.Store(true)`. `goboot/web` implements no `Drainer` and lets go of connections in `Stop`,
+**This had never mattered, because until these two packages landed go-boot shipped exactly one
+`Drainer`.** The only `Drain` outside tests and `prototypes/` was `actuator/actuator.go`, and its
+whole body is `a.draining.Store(true)`. Grep now and there are three: the two below are the other
+two, and neither waits, for the reason this passage exists.
+`goboot/web` implements no `Drainer` and lets go of connections in `Stop`,
 through `http.Server.Shutdown`, which has `stopTimeout` behind it. `goboot/grpc` is not a Component
 at all — [4.4](#44-gobootgrpc--the-grpc-transport-starter) has it own no server and mount on the
 HTTP Starter's listener, so it has no `Stop` either.
@@ -3121,11 +3169,13 @@ module-count predictions held exactly: `goboot/rabbit 3 3` and `goboot/kafka 6 6
   moving by one or two. franz-go's SASL and TLS were measured separately and cost no extra module,
   so the 6 covers a consumer with credentials, not only the bare one.
 - **[12](#12-versioning-and-release-policy)'s package list is the one thing that did not simply
-  follow.** The golden file gained its row in the same commit, as the rule requires, but the number
-  in that heading did not move: this section says the Messaging Starter ships after `v1.0.0`, and
-  §12's list is what `v1.0.0` promises. A note there now records the contradiction and leaves the
-  choice to whoever cuts the tag, because "fifteen becomes seventeen" quietly enrols two Starters in
-  a promise this section spent its opening paragraph keeping them out of.
+  follow.** The golden file gained its rows in the same commit, as the rule requires, but the number
+  in that heading did not move: this section said the Messaging Starter ships after `v1.0.0`, and
+  §12's list is what `v1.0.0` promises. The contradiction stood as a note for one ticket, because
+  "fifteen becomes seventeen" quietly enrols two Starters in a promise this section had spent its
+  opening paragraph keeping them out of, and that is a decision to make rather than a number to
+  bump. [#50](https://github.com/squall-chua/go-boot/issues/50) made it: both joined the promise,
+  fifteen became seventeen, and this section's opening paragraph was rewritten to say so.
 - **No Preset wires either one, and no Preset can.** A consumer needs a topic and a handler
   function, and ADR `0010` says a Preset takes no options, so there is nowhere for either to come
   from. `goboot/preset` is a short path, so assertion 2 turns that from a statement into a check.
