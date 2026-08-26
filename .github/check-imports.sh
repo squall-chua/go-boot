@@ -76,7 +76,7 @@ report "1. the base package and its tests import no go-boot subpackage" "$bad"
 #    Preset dragged the Actuator into an HTTP-only binary. goboot/security
 #    joined the list with #34: it is a package a user imports directly, so
 #    the rule that keeps Prometheus out of goboot/web keeps it out of there.
-heavy="$M/trace $M/grpc/health $M/grpc/metrics $M/grpc/reflection $M/trace/rpc $M/db/dbtest $M/web/metrics $M/rabbit"
+heavy="$M/trace $M/grpc/health $M/grpc/metrics $M/grpc/reflection $M/trace/rpc $M/db/dbtest $M/web/metrics $M/rabbit $M/kafka"
 leaked=0
 reaches() { # <package> <packages it must not reach>...
 	local p=$1 d h
@@ -105,6 +105,7 @@ reaches "$M/preset/traced" $(printf '%s\n' $heavy | grep -vxF "$M/trace")
 # assertion — assertion 2 already takes an arbitrary package and an arbitrary
 # list, so each is checked against the heavy list minus itself.
 reaches "$M/rabbit" $(printf '%s\n' $heavy | grep -vxF "$M/rabbit")
+reaches "$M/kafka"  $(printf '%s\n' $heavy | grep -vxF "$M/kafka")
 [ "$leaked" = 1 ] || say ok "2. no short-path package reaches a heavy optional package"
 
 # 3. goboot/db links NO driver. #13 measured pgx/v5/stdlib at +7.64 MB; a

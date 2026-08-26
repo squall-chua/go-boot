@@ -7,6 +7,7 @@ goboot/grpc               4   4
 goboot/grpc/health        5  13
 goboot/grpc/metrics      10  12
 goboot/grpc/reflection    3   5
+goboot/kafka              6   6
 goboot/preset            16  16
 goboot/preset/traced     36  36
 goboot/rabbit             3   3

@@ -2143,6 +2143,8 @@ pinning.
 | `connectrpc.com/grpcreflect` | v1.3.0 | `goboot/grpc/reflection` | [#29](https://github.com/squall-chua/go-boot/issues/29) | the reflection protos, both v1 and v1alpha, and the static reflector. **One extra linked module**, same reason |
 | `connectrpc.com/otelconnect` | v0.9.0 | `goboot/trace/rpc` | [#12](https://github.com/squall-chua/go-boot/issues/12) | RPC spans. Separate subpackage, and `goboot/trace` filters `otelhttp` for RPCs or you get two nested spans |
 | `github.com/fergusstrange/embedded-postgres` | v1.34.0 | `goboot/db/dbtest` | [#13](https://github.com/squall-chua/go-boot/issues/13) | 3 linked modules against `testcontainers-go`'s 45, and no Docker daemon. Real PostgreSQL 18.3 up in 2.77s |
+| `github.com/twmb/franz-go` | v1.21.6 | `goboot/kafka` | [#35](https://github.com/squall-chua/go-boot/issues/35) | **4 linked modules**, +7,352,423 bytes stripped — the second-largest entry in this table, and the one row where module count beat size. `segmentio/kafka-go` is 3 modules and 2.51 MB lighter but is still `v0.4.x` after years, and a `v0` under go-boot's own `v1` promise inherits "may break anything" permanently; `IBM/sarama` is 15 modules including a Kerberos stack and `go-spew`; `confluent-kafka-go` **does not compile with `CGO_ENABLED=0`**, measured. SASL and TLS cost **no extra module and 57,344 bytes**, so the count above is the whole price |
+| `github.com/twmb/franz-go/pkg/kmsg` | v1.13.1 | `goboot/kafka` (indirect) | [#35](https://github.com/squall-chua/go-boot/issues/35) | **Nobody chose this one; it arrives.** franz-go splits its Kafka protocol types into a second module, so the client's 4 is 2 of its own plus `klauspost/compress` and `pierrec/lz4` |
 | `github.com/rabbitmq/amqp091-go` | v1.14.0 | `goboot/rabbit` | [#35](https://github.com/squall-chua/go-boot/issues/35) | **1 linked module with zero transitive dependencies**, +3,825,767 bytes stripped. The RabbitMQ team's own continuation of `streadway/amqp`, and the only `v1` client for AMQP 0-9-1 in Go — there was no close call to weigh, unlike the Kafka side. Most of the size is `crypto/tls`, which stops being dead code the moment a connection is encrypted. Its `Config.Recovery` auto-reconnect is **not** used: it is opt-in and marked Experimental upstream, and [14](#14-the-messaging-starter-specified-and-post-v1) explains why a `v1` promise is not built on that |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 | `goboot/security` | [#34](https://github.com/squall-chua/go-boot/issues/34) | **1 linked module with zero transitive dependencies**, +36 KB on its own — measured against `go-jose/v4` at 1 module and +495 KB and `coreos/go-oidc/v3` at 3 modules and +1.17 MB. Wiring the Starter costs **+708,608 bytes**, mostly stdlib crypto that stops being dead code once something verifies a signature; [4.7](#47-gobootsecurity--the-security-starter) has both numbers and why they differ. It ships no JWKS client, so `goboot/security` writes one over `crypto/rsa` and `crypto/ecdsa` |
 
@@ -2223,21 +2225,27 @@ modules and 12.4 MB against 1 module and 9.2 MB.
 > other three cannot. The four injections and their output are recorded on #32.
 >
 > **A seventh package joins assertion 2.** `goboot/preset/traced` is not a short path, but it is the
-> one package allowed to reach `goboot/trace`, so it is checked against the other seven heavy
+> one package allowed to reach `goboot/trace`, so it is checked against the other eight heavy
 > packages. (The count is written out here, so it moves whenever the list does: it read "four" until
 > [#45](https://github.com/squall-chua/go-boot/issues/45), which is one behind what #41 had already
 > left, and "six" until [#35](https://github.com/squall-chua/go-boot/issues/35) added `goboot/rabbit`
-> — the script reads the list rather than the number, so only this sentence was ever wrong.)
+> and then `goboot/kafka` — the script reads the list rather than the number, so only this sentence
+> was ever wrong.)
 
 > **A heavy package may now be checked against its siblings, not only against short paths.**
-> [#35](https://github.com/squall-chua/go-boot/issues/35) added `goboot/rabbit` to the heavy list
-> *and* gave it a `reaches` line of its own against the heavy list minus itself, because "a Kafka
-> user links no RabbitMQ, and the reverse" is a rule between two heavy packages, which the seven
-> short paths above cannot express. It needed no sixth assertion: `reaches` already takes an
-> arbitrary package and an arbitrary list, which is the same door `goboot/preset/traced` went
-> through. **Proven to fail**: a blank import of `goboot/trace` in `goboot/rabbit` reports
-> `2. goboot/rabbit reaches goboot/trace`, and moves 4 and 5 as well, which is what a non-test
-> import is supposed to do. Without that it is the obvious place for the next heavy dependency to hide: a twin that
+> [#35](https://github.com/squall-chua/go-boot/issues/35) added `goboot/rabbit` and `goboot/kafka`
+> to the heavy list *and* gave each a `reaches` line of its own against the heavy list minus itself,
+> because "a Kafka user links no RabbitMQ, and the reverse" is a rule **between two heavy packages**,
+> which the seven short paths above cannot express. It needed no sixth assertion: `reaches` already
+> takes an arbitrary package and an arbitrary list, which is the same door `goboot/preset/traced`
+> went through.
+>
+> **Proven to fail in both directions**, which is the acceptance box it exists for: a blank import
+> of `goboot/rabbit` in `goboot/kafka` reports `2. goboot/kafka reaches goboot/rabbit`, and the
+> reverse import reports the mirror of it. A blank import of `goboot/trace` in `goboot/rabbit`
+> reports that leak too, and moves 4 and 5 as well, which is what a non-test import is supposed to
+> do. Measured on the real packages: `goboot/kafka` links `franz-go` and `franz-go/pkg/kmsg` and
+> nothing of RabbitMQ's; `goboot/rabbit` links `amqp091-go` and nothing of Kafka's. Without that it is the obvious place for the next heavy dependency to hide: a twin that
 > may reach one heavy package reads, to the next person, as a twin the rule does not apply to.
 >
 > **Two numbers moved.** The prediction above was that the trace leak takes `goboot/preset` from 15
@@ -2468,8 +2476,8 @@ Every exported identifier in them is covered by the promise below. `goboot/db/db
 list and not an afterthought: go-boot's own tests use it, so it is shipped code a user may
 reasonably build on.
 
-> **`goboot/rabbit` is in the module and is not in the list above, and that is an open question
-> rather than an oversight.** [#35](https://github.com/squall-chua/go-boot/issues/35) built it while
+> **`goboot/rabbit` and `goboot/kafka` are in the module and are not in the list above, and that is
+> an open question rather than an oversight.** [#35](https://github.com/squall-chua/go-boot/issues/35) built it while
 > the line is still `v0.x`, where "a minor bump may break anything, and is also how anything is
 > added", so shipping it now costs nobody a promise.
 > [14](#14-the-messaging-starter-specified-and-post-v1) says the Messaging Starter ships *after*
@@ -2477,11 +2485,11 @@ reasonably build on.
 > mechanism excluding it **is** surface the moment `v1.0.0` is cut. The three exclusions below are
 > `internal/`, `examples/` and `prototypes/`, and a Starter is none of them.
 >
-> So whoever cuts `v1.0.0` decides one of two things, and must decide it deliberately: either
-> `goboot/rabbit` joins the promise and this heading reads sixteen, or the tag waits until it is
-> ready to. There is no third option where it ships uncovered. Named here because the golden file
-> already carries its row, and the rule below says whoever updates that updates this list — this
-> note is that update, held one step short of a number nobody has chosen yet.
+> So whoever cuts `v1.0.0` decides one of two things, and must decide it deliberately: either both
+> join the promise and this heading reads seventeen, or the tag waits until they are ready to. There
+> is no third option where they ship uncovered. Named here because the golden file already carries
+> both rows, and the rule below says whoever updates that updates this list — this note is that
+> update, held one step short of a number nobody has chosen yet.
 
 Three things in the repository are **not** surface, and each is excluded by a mechanism rather than
 by a sentence, so it cannot drift. `internal/` is excluded by the Go compiler. `examples/` are
@@ -3077,11 +3085,11 @@ still running; `Stop` blocks until that handler returns; and `Stop` gives up, ca
 context and returns anyway once its own context expires. The third is the one that would catch a
 hung shutdown, so it is the one not to skip. None needs a broker.
 
-### What changes in this document, and in CI, when the code lands
+### What changed in this document, and in CI, when the code landed
 
-Nothing below is edited now. The packages do not exist, and
-[12](#12-versioning-and-release-policy) is a promise about what ships. Written out here so whoever
-builds this has the list rather than rediscovering it:
+**Both packages are built.** This list was written before them, as a prediction of what building
+would disturb, and every entry below has since been done except the one marked otherwise. The two
+module-count predictions held exactly: `goboot/rabbit 3 3` and `goboot/kafka 6 6`.
 
 - **[7](#7-dependencies-and-the-ticket-that-chose-each-one) gains two rows**, for
   `github.com/twmb/franz-go` and `github.com/rabbitmq/amqp091-go`, each citing #35 in the Ticket
@@ -3108,9 +3116,10 @@ builds this has the list rather than rediscovering it:
   third time, and the first where it was seen coming.
 - **`.github/module-counts.txt` gains two rows**, and a new package fails CI until it does.
   Predicted, from `goboot`'s own 2 plus each client's linked count: `goboot/kafka 6 6` with
-  franz-go — 5 with segmentio — and `goboot/rabbit 3 3`. Predictions, not measurements: the real
-  numbers are whatever `--update` writes, and [8.1](#81-the-import-leak-check) has a standing habit
-  of these moving by one or two.
+  franz-go — 5 with segmentio — and `goboot/rabbit 3 3`. **Both landed on the predicted number**,
+  which is worth recording because [8.1](#81-the-import-leak-check) has a standing habit of these
+  moving by one or two. franz-go's SASL and TLS were measured separately and cost no extra module,
+  so the 6 covers a consumer with credentials, not only the bare one.
 - **[12](#12-versioning-and-release-policy)'s package list is the one thing that did not simply
   follow.** The golden file gained its row in the same commit, as the rule requires, but the number
   in that heading did not move: this section says the Messaging Starter ships after `v1.0.0`, and
@@ -3120,6 +3129,13 @@ builds this has the list rather than rediscovering it:
 - **No Preset wires either one, and no Preset can.** A consumer needs a topic and a handler
   function, and ADR `0010` says a Preset takes no options, so there is nowhere for either to come
   from. `goboot/preset` is a short path, so assertion 2 turns that from a statement into a check.
+- **The drain-order test the ticket asks for was already in the repository.**
+  `TestDrainRunsInStartOrderBeforeAnyStop` in `app_test.go` asserts
+  `start observe start transport drain observe drain transport stop transport stop observe`, which
+  is the sequence this section describes with a `TierObserve` fake standing in for the Actuator. A
+  consumer cannot join it, because `Start` needs a broker; what each consumer package proves
+  instead is its own half — that `Drain` lets go, `Stop` waits, and `Stop` gives up — against a
+  fake fetch loop.
 - **Neither package is on the ten-minute path** of [13](#13-docs-and-examples), and **no rule
   requires either an example directory.** This was worth checking rather than assuming: [8.2](#82-ci-builds-both-forms-of-every-preset)'s
   one-directory-per-Preset rule is about Presets, and no Preset wires a consumer; [13](#13-docs-and-examples)'s
