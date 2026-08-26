@@ -32,6 +32,13 @@ type Component interface {
 
 // Drainer is optional: stop taking new work. Drain runs in START order,
 // before any Stop.
+//
+// Drain must return promptly. Run calls Stop with context.WithoutCancel, so
+// under Run the ctx here has no deadline and can never be cancelled; Drain
+// also returns no error, and the Drainers run one after another. A Drain that
+// waits for work in flight therefore blocks the whole shutdown with nothing
+// able to interrupt it. Stop is where waiting belongs, because its ctx carries
+// StopTimeout.
 type Drainer interface{ Drain(ctx context.Context) }
 
 // Checker is optional: the Actuator registers it under Name(). Nothing is

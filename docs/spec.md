@@ -2944,6 +2944,15 @@ So a consumer is not merely the first Drainer outside the Transports, as
 [11](#11-deferred-past-v1) put it. It is the **first `Drain` in go-boot with anything to do**, and
 the interface has no budget to do it in.
 
+> **This outlived the ticket that found it.** The hole is in the base package, not in messaging, so
+> it is [#49](https://github.com/squall-chua/go-boot/issues/49), and it is a `v1` question rather
+> than a post-v1 one: `Drainer` is public surface under
+> [12](#12-versioning-and-release-policy), so giving it a budget or an error return is much harder
+> after the tag than before. `Drainer`'s doc comment in `goboot.go` now states the constraint,
+> which is the cheap guard; #49 decides whether that is the whole answer. Nothing in this section
+> depends on the outcome — the consumers below are designed to the constraint as it stands, and
+> they stay correct if #49 loosens it.
+
 **So the consumer's `Drain` stops fetching and returns, and the waiting moves to `Stop`.** `Drain`
 tells the fetch loop to take no more messages, which is exactly what the interface's name promises
 and all it can safely do. `Stop` is where in-flight handlers are waited on, because `stopStarted`
