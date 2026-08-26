@@ -2684,6 +2684,18 @@ is that section, so **with #38 closed against it the gate is open**. It changed 
 `web.New` and `actuator.New`, and that change must ship in a `v0` release **before** the `v1.0.0`
 tag rather than in the tag itself.
 
+> **[#51](https://github.com/squall-chua/go-boot/issues/51) asked to be a second gate, and it did
+> not need to become one.** It opened saying it "should gate `v1.0.0`", on the argument that
+> `goboot/kafka` and `goboot/rabbit` were frozen by
+> [#50](https://github.com/squall-chua/go-boot/issues/50) without ever having met a real broker, so
+> the tag was the last moment a wrong shape could change. That argument was right, and it was
+> answered by doing the work rather than by adding a sentence here: both Starters now run against a
+> real broker, **no signature changed**, and the one thing that did change — where a new consumer
+> group starts — was a frozen default rather than a surface, moved before the tag.
+> [What a real broker said](#what-a-real-broker-said) carries the whole of it, and
+> [9. Known gaps in v1](#9-known-gaps-in-v1) carries what that default costs. **The gate above
+> stands as the only one**, and it is still open.
+
 ### The release checklist
 
 The same five steps for every tag, `v0` and `v1` alike.
