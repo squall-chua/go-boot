@@ -2202,7 +2202,9 @@ below.
    `goboot/security`, the last added by
    [#34](https://github.com/squall-chua/go-boot/issues/34). The heavy
    optional packages are `goboot/trace`, `goboot/grpc/health`, `goboot/grpc/metrics`,
-   `goboot/grpc/reflection`, `goboot/trace/rpc`, `goboot/db/dbtest` and `goboot/web/metrics`.
+   `goboot/grpc/reflection`, `goboot/trace/rpc`, `goboot/db/dbtest`, `goboot/web/metrics`,
+   `goboot/rabbit` and `goboot/kafka`, the last two added by
+   [#35](https://github.com/squall-chua/go-boot/issues/35).
    `goboot/grpc/metrics` was added by [#41](https://github.com/squall-chua/go-boot/issues/41), and
    it is the rule doing its plainest job: the package registers on the Prometheus default registry,
    so listing it is what stops `goboot/grpc` growing the dependency
@@ -2285,9 +2287,12 @@ modules and 12.4 MB against 1 module and 9.2 MB.
 >
 > **Both numbers share `.github/module-counts.txt`**, as `<package> <user links> <tests link>`, with
 > a header line naming the columns. The two are compared column by column, so the report says which
-> assertion moved rather than leaving the reader to guess. Four rows carry a second number today:
-> `goboot/db` 7 → 24, `goboot/trace/rpc` 10 → 27, `goboot/grpc/health` 5 → 13 and
-> `goboot/grpc/reflection` 3 → 5. The other eight packages pull nothing extra in their tests.
+> assertion moved rather than leaving the reader to guess. Six rows carry a second number today:
+> `goboot/db` 7 → 24, `goboot/trace/rpc` 10 → 27, `goboot/grpc/health` 5 → 13,
+> `goboot/grpc/metrics` 10 → 12, `goboot/web/metrics` 9 → 11 and `goboot/grpc/reflection` 3 → 5.
+> The other eleven packages pull nothing extra in their tests. (Read "four" and "eight" until
+> [#52](https://github.com/squall-chua/go-boot/issues/52): `goboot/grpc/metrics` and
+> `goboot/web/metrics` arrived with a second number and only the golden file noticed.)
 >
 > **Proven to fail**, the way the other four were: a `goboot/web` test importing
 > `prometheus/client_golang` moves that row from `2 2` to `2 11` and fails 5 **and nothing else**.
@@ -2594,17 +2599,22 @@ Named here so nobody has to infer them from silence.
 - **Dependency versions.** Any dependency in [7. Dependencies](#7-dependencies-and-the-ticket-that-chose-each-one)
   may be bumped in a minor release. A *new* dependency still obeys the optional-subpackage rule, and
   shows up as a `.github/module-counts.txt` change either way, so it cannot arrive quietly.
-- **Six of the eight gaps of [9. Known gaps in v1](#9-known-gaps-in-v1).** All eight ship **with**
+- **Five of the seven gaps of [9. Known gaps in v1](#9-known-gaps-in-v1).** All seven ship **with**
   `v1` rather than blocking it. Closing one is a minor release **only where the fix adds something
   or repairs a bug** — for several of those the gap *is* the current behaviour, so the fix changes
   what an operator sees and belongs in the release note. #43 is the worked example: the access log
   used to record a plain 200 for every failed gRPC call, and closing that added an `rpcCode` field
   to a line operators already grep.
-  **Two of the eight cannot be closed inside `v1` at all**, because the rules above forbid it:
+  **Two of the seven cannot be closed inside `v1` at all**, because the rules above forbid it:
   `maxOpenConns: 10` is a default value, and splitting the Actuator's Prometheus weight into
   `goboot/actuator/metrics` would need a second mount line in the user's own `main`. Both wait
   for `v2`. They are gaps go-boot has decided to live with for the life of `v1`, and the release
   note says that rather than implying a fix is coming.
+  (**This count read "eight" until [#52](https://github.com/squall-chua/go-boot/issues/52)**, and
+  the list was never wrong — [#41](https://github.com/squall-chua/go-boot/issues/41) closed the *No
+  RPC metrics* gap and removed its bullet, and these three numbers stayed behind. #41 is the same
+  ticket praised above for holding the golden-file rule. Holding one written-out count is no
+  evidence about another, which is the whole reason both are called out rather than trusted.)
 
 ### The one thing that gates `v1.0.0`
 
