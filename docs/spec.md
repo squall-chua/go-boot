@@ -2394,6 +2394,20 @@ Written down as gaps, not left out.
   whitelist, so `main` would need a second mount line, and `act.MountOn(srv)` being one line that is
   correct in both port modes is the Actuator's best property. Half the weight ADR `0010` split
   `traced.Full` out for, for an API cost ADR `0003` was written to avoid.
+- **`goboot/kafka` and `goboot/rabbit` are frozen and have never met a real broker.** This is the
+  one gap on this list that is about **confidence** rather than behaviour, and it is written as a
+  gap because [#50](https://github.com/squall-chua/go-boot/issues/50) put both packages inside the
+  `v1` promise, where a wrong shape can no longer be fixed. Their shutdown behaviour is proven
+  against fake fetch loops — `Component.consume` takes `poll` and `commit` as parameters so the
+  tests can drive the real loop with no cluster behind it — which is the right test for what
+  [#49](https://github.com/squall-chua/go-boot/issues/49) settled and says nothing about
+  rebalancing, redelivery under load, or a coordinator moving mid-commit. `goboot/rabbit`'s
+  `redial` is exercised the same way. [14](#14-the-messaging-starter-specified-and-in-the-v1-promise)
+  also still names one unmeasured claim: franz-go was chosen over `segmentio/kafka-go` on version
+  line and module count, not on consumer-group correctness.
+  [#51](https://github.com/squall-chua/go-boot/issues/51) is what closes this, and it should close
+  **before** the tag rather than after — a bug behind the API is a `v1` fix, but a wrong signature
+  is a `v2`. ([#50](https://github.com/squall-chua/go-boot/issues/50))
 
 ---
 
@@ -2524,10 +2538,10 @@ reasonably build on.
 > **The `v1.0.0` release note names both packages**, under the second bullet of
 > [what every release note carries](#what-every-release-note-carries). A package arriving breaks
 > nothing, so nothing else in that note would mention them, and without that bullet a user who
-> reads only the note would learn that a version shipped and not that two Starters did. **The note
-> also carries what this one says about them**, because the release note names the gaps of
-> [9. Known gaps in v1](#9-known-gaps-in-v1) as they stand and neither Starter having met a real
-> broker is not on that list.
+> reads only the note would learn that a version shipped and not that two Starters did. **What this
+> note says about them is on [9. Known gaps in v1](#9-known-gaps-in-v1) too**, added by
+> [#53](https://github.com/squall-chua/go-boot/issues/53), so the release note carries it under the
+> §9 bullet rather than only here.
 
 Three things in the repository are **not** surface, and each is excluded by a mechanism rather than
 by a sentence, so it cannot drift. `internal/` is excluded by the Go compiler. `examples/` are
@@ -2599,22 +2613,23 @@ Named here so nobody has to infer them from silence.
 - **Dependency versions.** Any dependency in [7. Dependencies](#7-dependencies-and-the-ticket-that-chose-each-one)
   may be bumped in a minor release. A *new* dependency still obeys the optional-subpackage rule, and
   shows up as a `.github/module-counts.txt` change either way, so it cannot arrive quietly.
-- **Five of the seven gaps of [9. Known gaps in v1](#9-known-gaps-in-v1).** All seven ship **with**
+- **Six of the eight gaps of [9. Known gaps in v1](#9-known-gaps-in-v1).** All eight ship **with**
   `v1` rather than blocking it. Closing one is a minor release **only where the fix adds something
   or repairs a bug** — for several of those the gap *is* the current behaviour, so the fix changes
   what an operator sees and belongs in the release note. #43 is the worked example: the access log
   used to record a plain 200 for every failed gRPC call, and closing that added an `rpcCode` field
   to a line operators already grep.
-  **Two of the seven cannot be closed inside `v1` at all**, because the rules above forbid it:
+  **Two of the eight cannot be closed inside `v1` at all**, because the rules above forbid it:
   `maxOpenConns: 10` is a default value, and splitting the Actuator's Prometheus weight into
   `goboot/actuator/metrics` would need a second mount line in the user's own `main`. Both wait
   for `v2`. They are gaps go-boot has decided to live with for the life of `v1`, and the release
   note says that rather than implying a fix is coming.
-  (**This count read "eight" until [#52](https://github.com/squall-chua/go-boot/issues/52)**, and
-  the list was never wrong — [#41](https://github.com/squall-chua/go-boot/issues/41) closed the *No
-  RPC metrics* gap and removed its bullet, and these three numbers stayed behind. #41 is the same
-  ticket praised above for holding the golden-file rule. Holding one written-out count is no
-  evidence about another, which is the whole reason both are called out rather than trusted.)
+  (**These three numbers went eight → seven → eight in two commits, and both moves were right.**
+  [#41](https://github.com/squall-chua/go-boot/issues/41) closed the *No RPC metrics* gap and
+  removed its bullet without moving them, so [#52](https://github.com/squall-chua/go-boot/issues/52)
+  brought them to seven; [#53](https://github.com/squall-chua/go-boot/issues/53) then added the
+  consumer gap and they went back to eight. #41 is the same ticket praised above for holding the
+  golden-file rule, which is the point: holding one written-out count is no evidence about another.)
 
 ### The one thing that gates `v1.0.0`
 
