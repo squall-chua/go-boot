@@ -510,6 +510,27 @@ func TestCORS(t *testing.T) {
 		}
 	})
 
+	// docs/spec.md 4.3 refuses RFC 7807's instance member because
+	// "the X-Request-Id on the response already answers which occurrence was
+	// this". Only seven response headers are readable cross-origin without
+	// being named, and that is not one of them, so without this the argument
+	// is false for exactly the callers CORS exists to serve.
+	t.Run("the request id is readable cross-origin", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "http://"+s.addr+"/open", nil)
+		req.Header.Set("Origin", "https://app.example.com")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.Header.Get("X-Request-Id") == "" {
+			t.Fatal("no X-Request-Id on the response at all")
+		}
+		if got := resp.Header.Get("Access-Control-Expose-Headers"); !strings.Contains(got, "X-Request-Id") {
+			t.Fatalf("Access-Control-Expose-Headers = %q; a browser on another origin cannot read the request id", got)
+		}
+	})
+
 	t.Run("another origin gets no allow header", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodGet, "http://"+s.addr+"/open", nil)
 		req.Header.Set("Origin", "https://app.example.com.evil.test")
@@ -698,6 +719,39 @@ func TestAnyOfTheAudiencesIsEnough(t *testing.T) {
 	c["aud"] = "billing-api"
 	if resp, _ := get(t, s, "/open", i.sign(c)); resp.StatusCode != http.StatusUnauthorized {
 		t.Error("a third audience was accepted")
+	}
+}
+
+// TestExposedHeadersAreAUnion: a service naming a header of its own means
+// "also expose this", never "and hide the request id".
+func TestExposedHeadersAreAUnion(t *testing.T) {
+	i := newIssuer(t)
+	cfg := jwtOnly(i)
+	cfg.CORS.AllowedOrigins = []string{"https://app.example.com"}
+	// x-request-id in a different case, so the de-duplication is exercised
+	// rather than merely present.
+	cfg.CORS.ExposedHeaders = []string{"X-Total-Count", "x-request-id"}
+	s := serve(t, cfg, mountBoth)
+
+	req, _ := http.NewRequest(http.MethodGet, "http://"+s.addr+"/open", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	got := resp.Header.Get("Access-Control-Expose-Headers")
+	for _, want := range []string{"X-Request-Id", "X-Total-Count"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Access-Control-Expose-Headers = %q, want %s in it", got, want)
+		}
+	}
+	// Named again by the service, it must not be listed twice. Counted
+	// case-insensitively, because the duplicate arrives in whatever case the
+	// service wrote it and a case-sensitive count would miss exactly the one
+	// the de-duplication exists to remove.
+	if n := strings.Count(strings.ToLower(got), "x-request-id"); n != 1 {
+		t.Errorf("Access-Control-Expose-Headers = %q lists the request id %d times, want 1", got, n)
 	}
 }
 

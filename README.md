@@ -402,6 +402,11 @@ current browsers read, and on a JSON API the older header does nothing.
 machine, it pins `localhost` to HTTPS in that browser for the whole `max-age`, and undoing it means
 a trip into browser internals.
 
+**`X-Request-Id` is always readable cross-origin.** A browser can only read seven response headers
+by default, and that is not one of them, so go-boot names it in `Access-Control-Expose-Headers` for
+you — otherwise the request id it puts on every response would be invisible to exactly the callers
+you turned CORS on for. `exposedHeaders` **adds** to it rather than replacing it.
+
 CORS **refuses the dangerous mistake at startup**: `allowedOrigins: ["*"]` together with
 `allowCredentials: true` is an error rather than a note in this file. Origins are matched exactly —
 there is no pattern syntax, because a wildcard in the middle of an origin is how

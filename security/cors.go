@@ -15,6 +15,7 @@ type CORSConfig struct {
 	AllowedOrigins   []string      `yaml:"allowedOrigins"`   // exact origins, or the single entry "*"
 	AllowedMethods   []string      `yaml:"allowedMethods"`   // GET, POST, PUT, PATCH, DELETE
 	AllowedHeaders   []string      `yaml:"allowedHeaders"`   // Authorization, Content-Type
+	ExposedHeaders   []string      `yaml:"exposedHeaders"`   // added to X-Request-Id, which is always exposed
 	AllowCredentials bool          `yaml:"allowCredentials"` // false
 	MaxAge           time.Duration `yaml:"maxAge"`           // 10m
 }
@@ -27,6 +28,23 @@ var (
 	defaultCORSMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
 	defaultCORSHeaders = []string{"Authorization", "Content-Type"}
 )
+
+// requestIDHeader is always exposed, and it is a UNION with whatever the
+// service names rather than a default the service replaces.
+//
+// Only seven response headers are readable cross-origin without being named
+// here, and X-Request-Id is not one of them. docs/spec.md 4.3 refuses RFC
+// 7807's instance member on the grounds that "the X-Request-Id on the
+// response already answers which occurrence was this" — and that sentence is
+// false for a browser on another origin unless this header goes out. So the
+// two halves of the design are made to agree here.
+//
+// A union and not a replacement, unlike allowedMethods and allowedHeaders
+// above, because a service naming X-Total-Count means "also expose this" and
+// never "and hide the request id". Hiding it would buy nothing either: the
+// value is on the wire already and visible in any developer console. This
+// header is go-boot's, the same way the probe paths in web.Logging are.
+const requestIDHeader = "X-Request-Id"
 
 const defaultCORSMaxAge = 10 * time.Minute
 
@@ -67,6 +85,13 @@ func CORS(cfg CORSConfig) (web.Middleware, error) {
 	age := seconds(maxAge)
 	origins := slices.Clone(cfg.AllowedOrigins)
 
+	exposed := requestIDHeader
+	if extra := slices.DeleteFunc(slices.Clone(cfg.ExposedHeaders), func(h string) bool {
+		return strings.EqualFold(h, requestIDHeader)
+	}); len(extra) > 0 {
+		exposed += ", " + strings.Join(extra, ", ")
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()
@@ -93,6 +118,10 @@ func CORS(cfg CORSConfig) (web.Middleware, error) {
 					h.Set("Access-Control-Allow-Methods", methods)
 					h.Set("Access-Control-Allow-Headers", headers)
 					h.Set("Access-Control-Max-Age", age)
+				} else {
+					// Only meaningful on the real response. A preflight
+					// carries no body and nothing reads its headers.
+					h.Set("Access-Control-Expose-Headers", exposed)
 				}
 			}
 			if preflight {

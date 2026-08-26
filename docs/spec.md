@@ -1422,6 +1422,7 @@ type CORSConfig struct {
 	AllowedOrigins   []string      `yaml:"allowedOrigins"`   // exact origins, or the single entry "*"
 	AllowedMethods   []string      `yaml:"allowedMethods"`   // GET, POST, PUT, PATCH, DELETE
 	AllowedHeaders   []string      `yaml:"allowedHeaders"`   // Authorization, Content-Type
+	ExposedHeaders   []string      `yaml:"exposedHeaders"`   // added to X-Request-Id, always exposed
 	AllowCredentials bool          `yaml:"allowCredentials"` // false
 	MaxAge           time.Duration `yaml:"maxAge"`           // 10m
 }
@@ -1672,6 +1673,17 @@ out at boot beats finding it out from a support ticket. Origins are matched **ex
 no pattern syntax, because a wildcard in the middle of an origin is how `evil-example.com` gets
 matched by a rule meant for `app.example.com`. `Vary: Origin` is set on every response, allowed or
 not, so a shared cache cannot serve one origin's answer to another.
+
+**`X-Request-Id` is always exposed, and that is this section paying a debt
+[4.3](#43-gobootweb--the-http-transport-starter) ran up.** That section refuses RFC 7807's
+`instance` member on the grounds that "the `X-Request-Id` on the response already answers *which
+occurrence was this*". Only seven response headers are readable cross-origin without being named in
+`Access-Control-Expose-Headers`, and that is not one of them — so until this key existed the
+sentence was false for exactly the callers CORS is for. `exposedHeaders` is a **union** with it
+rather than a replacement, unlike `allowedMethods` and `allowedHeaders`: a service naming
+`X-Total-Count` means "also expose this" and never "and hide the request id", and hiding it would
+buy nothing anyway, since the value is on the wire and visible in any developer console. The header
+is go-boot's, the same way the probe paths of `web.Logging` are.
 
 **The header set is four headers, and `X-Frame-Options` is not one of them.**
 
