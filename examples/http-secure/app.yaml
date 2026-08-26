@@ -1,0 +1,15 @@
+web:
+  addr: ":8080"
+
+actuator:
+  expose: [livez, readyz, info, metrics, loglevel]
+
+security:
+  headers:
+    hstsMaxAge: 4320h # 180 days. Go durations have no "d" unit
+  cors:
+    allowedOrigins: [https://app.example.com]
+  jwt:
+    issuer: https://auth.example.com/
+    audience: orders-api
+    jwksUrl: https://auth.example.com/.well-known/jwks.json

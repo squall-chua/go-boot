@@ -1400,7 +1400,7 @@ this package nor a collector. `WithoutMetrics()` stays.
 
 ### 4.7 `goboot/security` — the Security Starter
 
-Settled in [#34](https://github.com/squall-chua/go-boot/issues/34). It owns the ground
+Settled in [#34](https://github.com/squall-chua/go-boot/issues/34). ADR `0013`. It owns the ground
 [4.3](#43-gobootweb--the-http-transport-starter) deliberately left empty, and it is where the two
 things [10](#10-what-go-boot-does-not-do) refused for v1 — CORS and security headers — come back,
 as something a user opts into rather than as a default every user links.
@@ -1637,6 +1637,29 @@ reads, and [4.3](#43-gobootweb--the-http-transport-starter) already said the hea
 a JSON API. HSTS is **off unless configured**, and that default is deliberate: sent over plain HTTP
 on a developer's machine it pins `localhost` to HTTPS in that browser for its whole `max-age`, and
 undoing it means a trip into browser internals.
+
+**The Actuator's own endpoints are guardable, and nothing in go-boot had to change for it.**
+`act.MountOn(srv)` puts `/actuator/*` on the shared listener, so on that shape
+`PUT /actuator/loglevel` is reachable by anyone who can reach the port. `actuator.Handler` is a
+**one-method interface** (ADR `0003` made it one so the Actuator need not import `goboot/web`), so a
+service passes its own `Handle` and wraps each route on the way past. `examples/http-secure` does
+exactly that.
+
+**Liveness and readiness must stay open in any such wrapper**, and that is the same rule as the
+global gate above rather than a second one: Kubernetes carries no bearer token, so a guard on
+`/livez` or `/readyz` means the pod never goes ready. The four patterns to skip are `GET /livez`,
+`GET /readyz`, `GET /actuator/livez` and `GET /actuator/readyz`. The other answer is `actuator.addr`
+([4.2](#42-gobootactuator)), which moves the Actuator to a private listener nothing routes to from
+outside — preferable where it can be run, because a port nobody can reach needs no scope check.
+
+**`examples/http-secure` is the compiled form of all of this**, and it exists for the reason
+[4.3](#43-gobootweb--the-http-transport-starter) gives for `examples/full/explicit.go`: a snippet
+nothing builds rots, and these have traps in them. Two, specifically — the middleware line must
+**append** to `web.DefaultMiddleware` or the security middleware lands outside `web.Recovery`, and
+the Actuator must be mounted through the wrapper or `/actuator/loglevel` is world-writable. Its test
+drives both: the probes answer with no token, `/actuator/loglevel` is 401 without one and 200 with
+the scope. `README.md` quotes that file under `<!-- from: ... -->` markers, so drift fails the build
+([8.4](#84-the-readmes-go-samples-are-compiled)).
 
 **No Preset wires it**, and the reason is [ADR 0010](docs/adr/0010-presets-have-no-options.md)
 rather than the import rule: a Preset takes no options, and every field of `JWTConfig` is a value
@@ -1955,6 +1978,14 @@ go-boot itself.
 | `examples/http-only` | 2 | 6,807,817 | 6.49 MB |
 | `examples/http-actuator-config` | 11 | 11,628,809 | 11.09 MB |
 | `examples/full` | 41 | 22,896,905 | 21.84 MB |
+
+> **A fourth binary, added by [#34](https://github.com/squall-chua/go-boot/issues/34).**
+> `examples/http-secure` is not a variant of the `main.go` this section is about — it is
+> `http-actuator-config` plus the Security Starter — so it gets no row above. Measured the same way:
+> **12 modules and 12,206,345 bytes**, against `http-actuator-config`'s 11 and 11,628,809. That is
+> **+1 module and +577,536 bytes** for security headers, CORS, JWT verification and a guarded
+> Actuator. See [4.7](#47-gobootsecurity--the-security-starter), which carries the same measurement
+> taken from the lighter end.
 
 > **Re-measured by [#46](https://github.com/squall-chua/go-boot/issues/46).** The `examples/full`
 > row moved for two reasons at once, and the release note should name both, because the row is one

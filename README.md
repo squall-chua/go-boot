@@ -14,7 +14,7 @@ it outright.
 Early. What works today is HTTP routes served by a real listener, started and stopped in Tier
 order, with a clean shutdown on SIGTERM; config from a file and the environment; the default
 middleware set with the response helpers below; the Actuator; the database Starter, with a
-real PostgreSQL for tests; the gRPC Transport; tracing; and the Presets. That is the whole library
+real PostgreSQL for tests; the gRPC Transport; tracing; the Security Starter; and the Presets. That is the whole library
 surface `docs/spec.md` locks, and CI keeps the import-leak check on it. What is left is the
 Scaffold, which that spec defers past v1.
 
@@ -266,14 +266,25 @@ security:
     jwksUrl: https://auth.example.com/.well-known/jwks.json
 ```
 
+<!-- from: examples/http-secure/main.go -->
 ```go
-sec, err := security.DefaultMiddleware(cfg.Security)
-if err != nil {
-    return err
-}
-srv.Use(append(web.DefaultMiddleware(app.Log), sec...)...)
+	sec, err := security.DefaultMiddleware(cfg.Security)
+	if err != nil {
+		return err
+	}
+	// APPEND. Use appends, so the first entry listed ends up outermost: this
+	// puts the security middleware inside web.Recovery, where a panic in it
+	// still becomes a 500 rather than an EOF.
+	srv.Use(append(web.DefaultMiddleware(app.Log), sec...)...)
+```
 
-srv.Handle("POST /orders", security.RequireScope("orders:write")(orders))
+<!-- from: examples/http-secure/main.go -->
+```go
+	// An open route: no wrapper, so no token is needed.
+	srv.Handle("GET /hello/{name}", http.HandlerFunc(hello))
+	// A guarded one. The wrapper is at the mount, next to the handler it
+	// protects, because nothing else can see whether it is missing.
+	srv.Handle("POST /orders", security.RequireScope("orders:write")(http.HandlerFunc(orders)))
 ```
 
 `DefaultMiddleware` is a slice you can print and edit. `Headers` is always in it; `CORS` joins once
@@ -307,12 +318,13 @@ told none of it, and the token itself is never logged.
 
 Read the Principal in a handler:
 
+<!-- from: examples/http-secure/main.go -->
 ```go
-p, ok := security.PrincipalFrom(r.Context())
-if !ok {
-    // No token was presented. On a route no RequireScope wraps, that is
-    // an anonymous caller rather than an error.
-}
+	p, ok := security.PrincipalFrom(r.Context())
+	if !ok {
+		web.WriteProblem(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
 ```
 
 `Principal` carries `Subject`, `Issuer`, `Scopes` and the whole claim map. `Scopes` reads `scope`
@@ -371,8 +383,43 @@ own. Wiring the whole of `DefaultMiddleware` plus one guarded route into `exampl
 that binary from 6,807,817 to 7,508,233 bytes stripped: **+700,416 bytes**, nearly all of it stdlib
 crypto that stops being dead code once something verifies a signature.
 
+### Guarding the Actuator
+
+`act.MountOn(srv)` registers `/actuator/*` on the shared listener, so on that shape
+`PUT /actuator/loglevel` is open to anyone who can reach the port. `actuator.Handler` is a
+**one-method interface**, so you can pass something else and guard the endpoints on the way past:
+
+<!-- from: examples/http-secure/main.go -->
+```go
+type operators struct {
+	srv *web.Server
+	mw  web.Middleware
+}
+
+// Handle guards everything except liveness and readiness. Kubernetes carries
+// no bearer token, so guarding those two would fail every probe and the pod
+// would never go ready — the same reason authentication is not a global gate.
+func (o operators) Handle(pattern string, h http.Handler) {
+	if isProbe(pattern) {
+		o.srv.Handle(pattern, h)
+		return
+	}
+	o.srv.Handle(pattern, o.mw(h))
+}
+```
+
+Liveness and readiness stay open, and that is not optional: Kubernetes carries no bearer token, so
+guarding those two means the pod never goes ready. `examples/http-secure` is the whole file, and its
+test drives exactly that — probes open, `/actuator/loglevel` 401 without a token and 200 with the
+scope.
+
+The other answer is `actuator.addr`, which moves the Actuator to its own private listener that
+nothing routes to from outside. If you can run one, prefer it: a port nobody can reach needs no
+scope check.
+
 **No Preset wires it**, because a Preset takes no options and every field of the `jwt` section is a
-value only your service knows. The two lines above go in `main`.
+value only your service knows. The wiring above goes in `main`, and `examples/http-secure` is that
+`main` in full — CI builds it and a test drives it, so these blocks cannot rot.
 
 ## The Actuator
 
