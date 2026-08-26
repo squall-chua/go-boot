@@ -365,7 +365,7 @@ validate, because "not applicable" and "overlooked" look identical in a shorter 
 | `goboot/actuator` | an `actuator.expose` entry naming no endpoint | binding the private listener |
 | `goboot/web` | half a `web.tls` pair | binding the listener |
 | `goboot/web/metrics` | nothing: no config, no Component, no constructor at all. `metrics.Middleware` IS the middleware and registers at package init, so there is nothing to fail | — |
-| `goboot/security` | a `security.jwt` section missing `issuer`, `audience` or `jwksUrl`; a `jwksUrl` on plain `http` outside loopback; and `security.cors` allowing `*` with credentials, or setting `allowCredentials` with no origins | — no Component: the JWKS key set is fetched lazily, on the first token |
+| `goboot/security` | a `security.jwt` section missing `issuer` or `audience`; naming none or more than one of `jwksUrl`, `jwksFile` and `publicKeyFile`; a `jwksUrl` on plain `http` outside loopback; a key file that is missing, unreadable or not an RSA/ECDSA public key; and `security.cors` allowing `*` with credentials, or setting `allowCredentials` with no origins | — no Component. The two file sources are read here; `jwksUrl` is fetched lazily, on the first token |
 | `goboot/db` | a `db.driver` with no goose dialect, and `sql.Open` | reaching the database, pending migrations |
 | `goboot/trace` | a `trace.sampleRatio` outside 0..1 | building the exporter |
 | `goboot/preset`, `goboot/preset/traced` | nothing of their own — they return the first error the constructors above give them | — |
@@ -1427,10 +1427,15 @@ type CORSConfig struct {
 }
 
 type JWTConfig struct {
-	Issuer   string        `yaml:"issuer"`   // required
-	Audience string        `yaml:"audience"` // required
-	JWKSURL  string        `yaml:"jwksUrl"`  // required
-	Leeway   time.Duration `yaml:"leeway"`   // 30s
+	Issuer   string   `yaml:"issuer"`   // required
+	Audience []string `yaml:"audience"` // required, at least one; any of them satisfies aud
+
+	// Exactly one of these three.
+	JWKSURL       string `yaml:"jwksUrl"`       // an issuer's published key set, over https
+	JWKSFile      string `yaml:"jwksFile"`      // the same document, on disk
+	PublicKeyFile string `yaml:"publicKeyFile"` // one PEM public key or certificate
+
+	Leeway time.Duration `yaml:"leeway"` // 30s
 }
 
 // Principal is what a verified token became. Claims holds the whole payload,
@@ -1500,8 +1505,8 @@ reason it was wrong is the reason the rule is a measurement and not a habit.
 
 **The 36 KB is the dependency, not the Starter, and the difference is worth a second number.**
 Wiring this Starter into `examples/http-only` — the whole of `DefaultMiddleware` plus one
-`RequireScope` route — takes that binary from **6,807,817 to 7,508,233 bytes stripped**, which is
-**+700,416 bytes and +1 module**. Nearly all of the extra is stdlib that was already *compiled in*
+`RequireScope` route — takes that binary from **6,807,817 to 7,516,425 bytes stripped**, which is
+**+708,608 bytes and +1 module**. Nearly all of the extra is stdlib that was already *compiled in*
 and was being dead-code eliminated: `goboot/web` on its own calls nothing that verifies an RSA or
 an ECDSA signature, so `crypto/rsa`, `crypto/ecdsa`, `crypto/elliptic` and `math/big` fall out of
 the link. Verifying a token calls them, so they stay. Only **two packages** are new in the whole
@@ -1560,11 +1565,38 @@ wrong audience, unknown `kid` — goes to the **request logger** at WARN, `goboo
 means it carries the same `requestId` as the access line `web.Logging` writes. The token itself is
 never logged: it is a bearer credential, and a log file is not where one belongs.
 
-**JWKS is the only key source.** No shared HMAC secret, and no PEM on disk. A symmetric secret is
-the alg-confusion hole in the shape that keeps being rediscovered, and every OAuth2 issuer worth
-pointing a resource server at publishes a JWKS endpoint. The key set is fetched **lazily, on the
-first token**, not at startup: fetching at startup would turn an auth-server outage into a service
-that will not boot, which is the same mistake as a liveness probe that touches a dependency.
+**There are three key sources, all asymmetric, and exactly one may be named.** Two sources would
+mean go-boot choosing which wins, and the only right answer is "the one you meant", so naming two is
+a startup error and so is naming none.
+
+| Key | What it is | Rotation | Reach for it when |
+| --- | --- | --- | --- |
+| `jwksUrl` | the issuer's published key set, over `https` | an unknown `kid` re-fetches | almost always |
+| `jwksFile` | the same JWKS document on disk | an unknown `kid` re-reads the file | the service may make no outbound request, or the key set arrives as a mounted ConfigMap |
+| `publicKeyFile` | one PEM public key, or a certificate carrying one | none — a change needs a restart | there is no issuer endpoint at all, only a key someone handed you |
+
+**No shared secret, on any of the three.** There is no `hmacSecret`, and `publicKeyFile` refuses
+anything that is not an RSA or ECDSA public key — a private key file, the one most likely to be
+pointed at by mistake, is refused by name. A symmetric secret is the alg-confusion hole in the shape
+that keeps being rediscovered, and admitting one here would be the same hole arriving through a
+different key.
+
+**`jwksUrl` is fetched lazily, on the first token**, not at startup: fetching at startup would turn
+an auth-server outage into a service that will not boot, which is the same mistake as a liveness
+probe that touches a dependency. What that costs instead is **measured, not argued** — a warm cache
+survives an issuer outage indefinitely, because a known `kid` is answered from cache before any
+refetch is considered; but a **cold start during an outage refuses every token**. Both halves are
+pinned by `TestWhatAnIssuerOutageCosts`. A service that cannot accept the second half is exactly the
+service `jwksFile` is for, and the two file sources are read **at construction**, so a wrong path is
+a startup error rather than a 401 an hour later.
+
+> **The three sources arrived after the section was first written.** #34 shipped `jwksUrl` alone,
+> on the argument that every issuer worth pointing at publishes one. Review found two holes in that:
+> the cold-start behaviour above, which no test had measured, and the plain fact that some services
+> are not allowed to make an outbound request at all. Spring's `NimbusJwtDecoder` — the thing this
+> library is modelled on — offers four sources, `withJwkSetUri`, `withIssuerLocation`,
+> `withPublicKey` and `withSecretKey`. go-boot now offers three of those four. The one still
+> refused is `withSecretKey`, and that refusal is the part of the original call that survived.
 
 **Rotation is handled by the unknown `kid`, not by a timer.** A token whose `kid` is not in the
 cache triggers one refetch, rate-limited to **one every ten seconds** so a stream of junk `kid`s
@@ -1593,13 +1625,31 @@ misconfiguration in this section that looks like nothing at all in a YAML file.
 
 **Issuer and audience are both required, and `Authenticate` refuses a config without them** — as
 does `DefaultMiddleware`, which calls it. There is no `New` in this package: it starts nothing and
-holds nothing, so there is no Component to build. A resource
-server that does not check `aud` accepts every token the issuer minted, including the one meant for
-a different client of the same issuer — which is not a subtle failure, it is the whole reason the
-claim exists. `exp` is required on the token as well. This follows
+holds nothing, so there is no Component to build. A resource server that does not check `aud`
+accepts every token the issuer minted, including the one meant for a different client of the same
+issuer — which is not a subtle failure, it is the whole reason the claim exists. `exp` is required
+on the token as well. This follows
 [4.0](#40-the-error-convention-every-starter-follows): the constructor validates its own config,
 and `Authenticate` reaches nothing outside the `JWTConfig` struct, so every one of these faults is
 a startup error rather than a 401 in production.
+
+**This is stricter than Spring, deliberately.** Spring Security validates `iss`, `exp` and `nbf` by
+default and **not** `aud` — a developer opts in with
+`spring.security.oauth2.resourceserver.jwt.audiences` or a custom validator. That default is a
+well-known footgun, and "sane defaults" is what go-boot is for, so here the key is mandatory. The
+concept is not alien to the audience: Spring has a first-class key for it, and Spring's is **plural**,
+which is why go-boot's is a list too. Any one of the entries satisfies `aud`, so a service can
+answer to two names at once while an identifier is being renamed.
+
+**`aud` is read in every shape it legally takes.** RFC 7519 allows a string or an array of strings;
+both are accepted, and a token whose `aud` array contains any configured audience passes. A token
+carrying **no** `aud`, or an empty array — the shape a misconfigured mapper emits — is refused.
+`TestTheAudienceClaimInEveryShape` pins all four.
+
+> **Read this if every request is a 401 and the log says `token has invalid audience`.** The
+> commonest cause is the issuer, not this config: Keycloak's default realm does not put a
+> resource-specific value in `aud` until an audience mapper is added to the client. go-boot cannot
+> fix that from its side, and will not accept the token without it.
 
 **The algorithms are an allowlist** — `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`,
 `ES256`, `ES384` and `ES512` — and it is not a config key. Every entry is asymmetric, so `alg: none`
@@ -1982,8 +2032,8 @@ go-boot itself.
 > **A fourth binary, added by [#34](https://github.com/squall-chua/go-boot/issues/34).**
 > `examples/http-secure` is not a variant of the `main.go` this section is about — it is
 > `http-actuator-config` plus the Security Starter — so it gets no row above. Measured the same way:
-> **12 modules and 12,206,345 bytes**, against `http-actuator-config`'s 11 and 11,628,809. That is
-> **+1 module and +577,536 bytes** for security headers, CORS, JWT verification and a guarded
+> **12 modules and 12,218,633 bytes**, against `http-actuator-config`'s 11 and 11,628,809. That is
+> **+1 module and +589,824 bytes** for security headers, CORS, JWT verification and a guarded
 > Actuator. See [4.7](#47-gobootsecurity--the-security-starter), which carries the same measurement
 > taken from the lighter end.
 
@@ -2041,7 +2091,7 @@ pinning.
 | `connectrpc.com/grpcreflect` | v1.3.0 | `goboot/grpc/reflection` | [#29](https://github.com/squall-chua/go-boot/issues/29) | the reflection protos, both v1 and v1alpha, and the static reflector. **One extra linked module**, same reason |
 | `connectrpc.com/otelconnect` | v0.9.0 | `goboot/trace/rpc` | [#12](https://github.com/squall-chua/go-boot/issues/12) | RPC spans. Separate subpackage, and `goboot/trace` filters `otelhttp` for RPCs or you get two nested spans |
 | `github.com/fergusstrange/embedded-postgres` | v1.34.0 | `goboot/db/dbtest` | [#13](https://github.com/squall-chua/go-boot/issues/13) | 3 linked modules against `testcontainers-go`'s 45, and no Docker daemon. Real PostgreSQL 18.3 up in 2.77s |
-| `github.com/golang-jwt/jwt/v5` | v5.3.1 | `goboot/security` | [#34](https://github.com/squall-chua/go-boot/issues/34) | **1 linked module with zero transitive dependencies**, +36 KB on its own — measured against `go-jose/v4` at 1 module and +495 KB and `coreos/go-oidc/v3` at 3 modules and +1.17 MB. Wiring the Starter costs **+700,416 bytes**, mostly stdlib crypto that stops being dead code once something verifies a signature; [4.7](#47-gobootsecurity--the-security-starter) has both numbers and why they differ. It ships no JWKS client, so `goboot/security` writes one over `crypto/rsa` and `crypto/ecdsa` |
+| `github.com/golang-jwt/jwt/v5` | v5.3.1 | `goboot/security` | [#34](https://github.com/squall-chua/go-boot/issues/34) | **1 linked module with zero transitive dependencies**, +36 KB on its own — measured against `go-jose/v4` at 1 module and +495 KB and `coreos/go-oidc/v3` at 3 modules and +1.17 MB. Wiring the Starter costs **+708,608 bytes**, mostly stdlib crypto that stops being dead code once something verifies a signature; [4.7](#47-gobootsecurity--the-security-starter) has both numbers and why they differ. It ships no JWKS client, so `goboot/security` writes one over `crypto/rsa` and `crypto/ecdsa` |
 
 **No database driver is linked by a go-boot Starter.** The user blank-imports their own.
 `pgx/v5/stdlib` is +7.64 MB.

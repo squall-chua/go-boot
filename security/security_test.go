@@ -5,14 +5,18 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -128,7 +132,7 @@ func (i *issuer) signES(c jwt.MapClaims) string {
 }
 
 func (i *issuer) jwtConfig() security.JWTConfig {
-	return security.JWTConfig{Issuer: i.url(), Audience: audience, JWKSURL: i.jwksURL()}
+	return security.JWTConfig{Issuer: i.url(), Audience: []string{audience}, JWKSURL: i.jwksURL()}
 }
 
 // service is a real App with a real web.Server on a real port, wired the way
@@ -626,6 +630,77 @@ func TestWhatAnIssuerOutageCosts(t *testing.T) {
 	})
 }
 
+// TestTheOtherKeySources covers jwksFile and publicKeyFile end to end. They
+// exist for a service that cannot make an outbound request, or has no issuer
+// to make one to, so the thing to prove is that a token verifies with NO
+// network in the picture at all.
+func TestTheOtherKeySources(t *testing.T) {
+	i := newIssuer(t)
+	dir := t.TempDir()
+
+	jwksPath := filepath.Join(dir, "jwks.json")
+	if err := os.WriteFile(jwksPath, []byte(i.jwks()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pemPath := filepath.Join(dir, "key.pem")
+	der, err := x509.MarshalPKIXPublicKey(&i.rsaKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pemPath, pem.EncodeToMemory(
+		&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	base := func() security.JWTConfig {
+		return security.JWTConfig{Issuer: i.url(), Audience: []string{audience}}
+	}
+	for _, tc := range []struct {
+		name string
+		cfg  security.JWTConfig
+	}{
+		{"jwksFile", func() security.JWTConfig { c := base(); c.JWKSFile = jwksPath; return c }()},
+		{"publicKeyFile", func() security.JWTConfig { c := base(); c.PublicKeyFile = pemPath; return c }()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := serve(t, security.Config{JWT: tc.cfg}, mountBoth)
+			// The issuer's HTTP endpoint is closed, so anything that
+			// reached for it would fail rather than quietly succeed.
+			i.srv.Close()
+			if resp, body := get(t, s, "/orders", i.sign(i.claims())); resp.StatusCode != http.StatusOK {
+				t.Fatalf("got %d %s, want 200 with no network", resp.StatusCode, body)
+			}
+			c := i.claims()
+			c["aud"] = "billing-api"
+			if resp, _ := get(t, s, "/open", i.sign(c)); resp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("a token for another audience was accepted: %d", resp.StatusCode)
+			}
+		})
+	}
+}
+
+// TestAnyOfTheAudiencesIsEnough is why the key is a list: a service being
+// renamed answers to both names at once.
+func TestAnyOfTheAudiencesIsEnough(t *testing.T) {
+	i := newIssuer(t)
+	cfg := i.jwtConfig()
+	cfg.Audience = []string{"orders-api", "orders.example.com"}
+	s := serve(t, security.Config{JWT: cfg}, mountBoth)
+
+	for _, aud := range []string{"orders-api", "orders.example.com"} {
+		c := i.claims()
+		c["aud"] = aud
+		if resp, body := get(t, s, "/orders", i.sign(c)); resp.StatusCode != http.StatusOK {
+			t.Errorf("aud %q: got %d %s, want 200", aud, resp.StatusCode, body)
+		}
+	}
+	c := i.claims()
+	c["aud"] = "billing-api"
+	if resp, _ := get(t, s, "/open", i.sign(c)); resp.StatusCode != http.StatusUnauthorized {
+		t.Error("a third audience was accepted")
+	}
+}
+
 // TestTheConstructorRejectsABadConfig is 4.0's rule: misconfiguration comes
 // back from the constructor, never from a 401 in production.
 func TestTheConstructorRejectsABadConfig(t *testing.T) {
@@ -641,17 +716,37 @@ func TestTheConstructorRejectsABadConfig(t *testing.T) {
 			security.Config{JWT: security.JWTConfig{Issuer: "https://i.test", JWKSURL: "https://i.test/jwks"}},
 			"security.jwt.audience"},
 		{"jwt with no issuer",
-			security.Config{JWT: security.JWTConfig{Audience: audience, JWKSURL: "https://i.test/jwks"}},
+			security.Config{JWT: security.JWTConfig{Audience: []string{audience}, JWKSURL: "https://i.test/jwks"}},
 			"security.jwt.issuer"},
 		{"jwt with no jwksUrl",
-			security.Config{JWT: security.JWTConfig{Issuer: "https://i.test", Audience: audience}},
-			"security.jwt.jwksUrl"},
+			security.Config{JWT: security.JWTConfig{Issuer: "https://i.test", Audience: []string{audience}}},
+			"security.jwt"},
+		{"jwt naming two key sources",
+			security.Config{JWT: security.JWTConfig{
+				Issuer: "https://i.test", Audience: []string{audience},
+				JWKSURL: "https://i.test/jwks", JWKSFile: "/tmp/jwks.json"}},
+			"security.jwt"},
+		{"jwt with an empty audience entry",
+			security.Config{JWT: security.JWTConfig{
+				Issuer: "https://i.test", Audience: []string{audience, "  "},
+				JWKSURL: "https://i.test/jwks"}},
+			"security.jwt.audience"},
+		{"a publicKeyFile that is not there",
+			security.Config{JWT: security.JWTConfig{
+				Issuer: "https://i.test", Audience: []string{audience},
+				PublicKeyFile: "/nonexistent/key.pem"}},
+			"security.jwt.publicKeyFile"},
+		{"a jwksFile that is not there",
+			security.Config{JWT: security.JWTConfig{
+				Issuer: "https://i.test", Audience: []string{audience},
+				JWKSFile: "/nonexistent/jwks.json"}},
+			"security.jwt.jwksFile"},
 		// The key set IS the root of trust, so plain http over a network an
 		// attacker can sit on is a total authentication bypass. Loopback is
 		// the exception, and every other test in this file relies on it.
 		{"a jwksUrl on plain http",
 			security.Config{JWT: security.JWTConfig{
-				Issuer: "https://i.test", Audience: audience, JWKSURL: "http://i.test/jwks"}},
+				Issuer: "https://i.test", Audience: []string{audience}, JWKSURL: "http://i.test/jwks"}},
 			"security.jwt.jwksUrl"},
 	}
 	for _, tc := range cases {

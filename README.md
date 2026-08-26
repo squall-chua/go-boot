@@ -264,6 +264,8 @@ security:
     issuer: https://auth.example.com/
     audience: orders-api
     jwksUrl: https://auth.example.com/.well-known/jwks.json
+    # ...or jwksFile: /etc/orders/jwks.json
+    # ...or publicKeyFile: /etc/orders/issuer.pem
 ```
 
 <!-- from: examples/http-secure/main.go -->
@@ -336,15 +338,43 @@ and Azure writes `roles`, so `Claims` holds the payload and the three lines are 
 
 ### Keys, and what is checked
 
-**JWKS is the only key source.** No shared HMAC secret and no PEM on disk. The key set is fetched
-**lazily, on the first token** — fetching at startup would turn an auth-server outage into a service
-that will not boot. Rotation needs no timer and no goroutine: a token with a `kid` the cache does not
-hold triggers one refetch, and no more than one every ten seconds, so junk `kid`s cannot be turned
-into traffic against your issuer.
+**Three key sources, all asymmetric, and you name exactly one.**
 
-`issuer`, `audience` and `jwksUrl` are all **required**, and the constructor says which one is
-missing. The audience check is the one worth defending: a resource server that skips it accepts
-every token the issuer minted, including tokens meant for a different client of the same issuer.
+| Key | What it is | Rotation |
+| --- | --- | --- |
+| `jwksUrl` | your issuer's key set, over `https` | an unknown `kid` re-fetches |
+| `jwksFile` | the same JWKS document on disk | an unknown `kid` re-reads the file |
+| `publicKeyFile` | one PEM public key, or a certificate carrying one | none — a change needs a restart |
+
+Reach for `jwksUrl` unless you cannot. The other two are for a service that may make no outbound
+request, or that was handed a key rather than an endpoint. Both file sources are read **at startup**,
+so a wrong path fails the boot instead of every request an hour later.
+
+**There is no `hmacSecret`,** and `publicKeyFile` refuses anything that is not an RSA or ECDSA public
+key — including a private key file, which is the one most likely to be pointed at by mistake. A
+shared secret is the alg-confusion hole in the shape that keeps being rediscovered.
+
+`jwksUrl` is fetched **lazily, on the first token** — fetching at startup would turn an auth-server
+outage into a service that will not boot. The trade that buys is worth knowing: once the key set is
+cached, an issuer outage costs you nothing, but a **cold start during one refuses every token**. If
+that is unacceptable, use `jwksFile`. Rotation needs no timer and no goroutine: a token with a `kid`
+the cache does not hold triggers one refetch, and no more than one every ten seconds, so junk `kid`s
+cannot be turned into traffic against your issuer.
+
+`issuer` and `audience` are **required**, and the constructor says which one is missing. The
+audience check is the one worth defending: a resource server that skips it accepts every token the
+issuer minted, including tokens meant for a different client of the same issuer. **This is stricter
+than Spring**, which validates `aud` only if you ask it to — that default is a well-known footgun,
+and sane defaults are the point of go-boot.
+
+`audience` is a **list**, and any one entry satisfies the claim, so a service can answer to two
+names at once while it is being renamed. `aud` is read as a string or as an array; a token carrying
+no `aud`, or an empty array, is refused.
+
+> **If every request is a 401 and the log says `token has invalid audience`,** look at your issuer
+> first. Keycloak's default realm does not put a resource-specific value in `aud` until you add an
+> audience mapper to the client.
+
 `exp` is required on the token too, and the algorithms are a fixed allowlist — `RS*`, `PS*`, `ES*`,
 all asymmetric, with no config key that could add `HS256` or `none`.
 
@@ -380,7 +410,7 @@ every response, allowed or not, so a shared cache cannot serve one origin's answ
 
 **What it costs.** One module, `github.com/golang-jwt/jwt/v5`, with no transitive dependencies of its
 own. Wiring the whole of `DefaultMiddleware` plus one guarded route into `examples/http-only` takes
-that binary from 6,807,817 to 7,508,233 bytes stripped: **+700,416 bytes**, nearly all of it stdlib
+that binary from 6,807,817 to 7,516,425 bytes stripped: **+708,608 bytes**, nearly all of it stdlib
 crypto that stops being dead code once something verifies a signature.
 
 ### Guarding the Actuator

@@ -16,14 +16,34 @@ import (
 	"github.com/squall-chua/go-boot/web"
 )
 
-// JWTConfig points at one OAuth2 issuer. Three of the four keys are required,
-// and the constructor says which one is missing.
+// JWTConfig points at one OAuth2 issuer.
+//
+// issuer and audience are required, and exactly ONE key source must be named.
+// The constructor says which rule was broken.
 type JWTConfig struct {
-	Issuer   string `yaml:"issuer"`   // required; the exact iss claim
-	Audience string `yaml:"audience"` // required; the exact aud this service answers to
-	JWKSURL  string `yaml:"jwksUrl"`  // required; where the signing keys are published
+	Issuer string `yaml:"issuer"` // required; the exact iss claim
+	// Audience is required and holds at least one entry. A token is accepted
+	// when its aud names ANY of them, which is what lets a service answer to
+	// two names at once while an identifier is being renamed. A single name
+	// binds too: the config layer splits a plain string on commas.
+	Audience []string `yaml:"audience"`
+
+	// Exactly one of these three. jwksUrl is the one to reach for; the other
+	// two exist for a service that cannot make an outbound request, or has
+	// no issuer to make it to.
+	JWKSURL       string `yaml:"jwksUrl"`       // an issuer's published key set, over https
+	JWKSFile      string `yaml:"jwksFile"`      // the same document, on disk
+	PublicKeyFile string `yaml:"publicKeyFile"` // one PEM public key or certificate
+
 	// Leeway is the clock skew allowed on exp and nbf. Default 30s.
 	Leeway time.Duration `yaml:"leeway"`
+}
+
+// isZero reports a section nobody filled in. JWTConfig holds a slice, so it
+// is not comparable and != cannot be used on it.
+func (c JWTConfig) isZero() bool {
+	return c.Issuer == "" && len(c.Audience) == 0 && c.JWKSURL == "" &&
+		c.JWKSFile == "" && c.PublicKeyFile == "" && c.Leeway == 0
 }
 
 // allowedAlgs is an allowlist, and it is not a config key: every entry is
@@ -111,25 +131,30 @@ func (p *Principal) has(want []string, all bool) bool {
 // resource server that does not check aud accepts every token the issuer
 // minted, including the one meant for a different client of the same issuer.
 func Authenticate(cfg JWTConfig) (web.Middleware, error) {
-	switch {
-	case cfg.Issuer == "":
+	if cfg.Issuer == "" {
 		return nil, errors.New("security.jwt.issuer: required, and must be the exact iss claim the issuer writes")
-	case cfg.Audience == "":
-		return nil, errors.New("security.jwt.audience: required, or this service accepts every token the issuer minted")
-	case cfg.JWKSURL == "":
-		return nil, errors.New("security.jwt.jwksUrl: required, and is the only key source")
 	}
-	if err := checkJWKSURL(cfg.JWKSURL); err != nil {
+	if len(cfg.Audience) == 0 {
+		return nil, errors.New("security.jwt.audience: required, or this service accepts every token the issuer minted, including one meant for a different client of it")
+	}
+	for _, a := range cfg.Audience {
+		if strings.TrimSpace(a) == "" {
+			return nil, errors.New("security.jwt.audience: holds an empty entry")
+		}
+	}
+	keys, err := keysFor(cfg)
+	if err != nil {
 		return nil, err
 	}
 	if cfg.Leeway == 0 {
 		cfg.Leeway = 30 * time.Second
 	}
-	keys := newKeySet(cfg.JWKSURL)
 	parser := jwt.NewParser(
 		jwt.WithValidMethods(allowedAlgs),
 		jwt.WithIssuer(cfg.Issuer),
-		jwt.WithAudience(cfg.Audience),
+		// Variadic, and ANY of them satisfies it. A token carrying no aud at
+		// all is refused, which is the whole reason the key is required.
+		jwt.WithAudience(cfg.Audience...),
 		jwt.WithExpirationRequired(),
 		jwt.WithLeeway(cfg.Leeway),
 	)
@@ -247,6 +272,32 @@ func require(want []string, all bool) web.Middleware {
 func invalidToken(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
 	web.WriteProblem(w, http.StatusUnauthorized, "invalid token")
+}
+
+// keysFor builds the one key source the config named, and refuses a config
+// that named none or more than one. Two sources would mean go-boot choosing
+// which of them wins, and the answer is only ever "the one you meant".
+func keysFor(cfg JWTConfig) (*keySet, error) {
+	named := 0
+	for _, v := range []string{cfg.JWKSURL, cfg.JWKSFile, cfg.PublicKeyFile} {
+		if v != "" {
+			named++
+		}
+	}
+	switch {
+	case named == 0:
+		return nil, errors.New("security.jwt: name one of jwksUrl, jwksFile or publicKeyFile; there is no default key source")
+	case named > 1:
+		return nil, errors.New("security.jwt: name only ONE of jwksUrl, jwksFile and publicKeyFile")
+	case cfg.JWKSURL != "":
+		if err := checkJWKSURL(cfg.JWKSURL); err != nil {
+			return nil, err
+		}
+		return newKeySet(cfg.JWKSURL), nil
+	case cfg.JWKSFile != "":
+		return newFileKeySet(cfg.JWKSFile)
+	}
+	return newPEMKeySet(cfg.PublicKeyFile)
 }
 
 // checkJWKSURL refuses a key set this service could not trust.

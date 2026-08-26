@@ -2,15 +2,20 @@ package security
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -402,5 +407,160 @@ func TestATokenWithNoKidTriesEveryKey(t *testing.T) {
 	}
 	if got := srv.fetches.Load(); got != 1 {
 		t.Fatalf("fetches = %d, want 1 — the keyless set should be cached like any other", got)
+	}
+}
+
+// TestReadPEMPublicKey covers the three shapes a PEM public key arrives in,
+// and the refusals. The refusals are the point: publicKeyFile must not become
+// the shared-secret source docs/spec.md 4.7 turned down.
+func TestReadPEMPublicKey(t *testing.T) {
+	dir := t.TempDir()
+	rk, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ek, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, typ string, der []byte) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: der}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	pkix, err := x509.MarshalPKIXPublicKey(&rk.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecPKIX, err := x509.MarshalPKIXPublicKey(&ek.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A self-signed certificate, because an IdP often hands over one of these
+	// rather than a bare key.
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &rk.PublicKey, rk)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("the three shapes that work", func(t *testing.T) {
+		for name, path := range map[string]string{
+			"PKIX":        write("pkix.pem", "PUBLIC KEY", pkix),
+			"PKCS1":       write("pkcs1.pem", "RSA PUBLIC KEY", x509.MarshalPKCS1PublicKey(&rk.PublicKey)),
+			"certificate": write("cert.pem", "CERTIFICATE", der),
+			"ecdsa":       write("ec.pem", "PUBLIC KEY", ecPKIX),
+		} {
+			key, err := readPEMPublicKey(path)
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+				continue
+			}
+			switch key.(type) {
+			case *rsa.PublicKey, *ecdsa.PublicKey:
+			default:
+				t.Errorf("%s gave a %T", name, key)
+			}
+		}
+	})
+
+	t.Run("a key that is not RSA or ECDSA is refused", func(t *testing.T) {
+		// The case the type switch in readPEMPublicKey actually catches. A
+		// private key file is turned away one step earlier, by its block
+		// type, but an Ed25519 public key is a perfectly good PKIX PUBLIC
+		// KEY block — it just cannot verify any algorithm on the allowlist.
+		// Refusing it here makes that a startup error instead of a 401 for
+		// every request.
+		pub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := write("ed25519.pem", "PUBLIC KEY", der)
+		if _, err := readPEMPublicKey(p); err == nil {
+			t.Fatal("an Ed25519 public key was accepted")
+		} else if !strings.Contains(err.Error(), "only RSA and ECDSA") {
+			t.Fatalf("%v does not say why", err)
+		}
+	})
+
+	t.Run("a private key is refused", func(t *testing.T) {
+		// The file most likely to be pointed at here by mistake, and the one
+		// it would be worst to accept.
+		p := write("priv.pem", "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(rk))
+		if _, err := readPEMPublicKey(p); err == nil {
+			t.Fatal("a private key file was accepted")
+		}
+	})
+
+	t.Run("the other refusals", func(t *testing.T) {
+		bad := map[string]string{
+			"not PEM at all": filepath.Join(dir, "junk.pem"),
+			"missing":        filepath.Join(dir, "nope.pem"),
+		}
+		if err := os.WriteFile(bad["not PEM at all"], []byte("hello"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for name, p := range bad {
+			_, err := readPEMPublicKey(p)
+			if err == nil {
+				t.Errorf("%s was accepted", name)
+			} else if !strings.HasPrefix(err.Error(), "security.jwt.publicKeyFile") {
+				t.Errorf("%s: %v does not open with the config key", name, err)
+			}
+		}
+	})
+}
+
+// TestAPEMKeySetIgnoresTheKid: a PEM file publishes no kid, so a kid on the
+// token names nothing and must not stop the one key being tried.
+func TestAPEMKeySetIgnoresTheKid(t *testing.T) {
+	dir := t.TempDir()
+	rk, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&rk.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "k.pem")
+	if err := os.WriteFile(p, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ks, err := newPEMKeySet(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kid := range []string{"", "k1", "whatever-the-issuer-put-here"} {
+		tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{})
+		tok.Header["kid"] = kid
+		signed, err := tok.SignedString(rk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := jwt.NewParser(jwt.WithValidMethods([]string{"RS256"})).Parse(signed, ks.keyfunc)
+		if err != nil || !parsed.Valid {
+			t.Errorf("kid %q: %v", kid, err)
+		}
+	}
+	// And a token signed by someone else still fails, so ignoring the kid
+	// widened nothing.
+	other, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{})
+	signed, err := tok.SignedString(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jwt.NewParser(jwt.WithValidMethods([]string{"RS256"})).Parse(signed, ks.keyfunc); err == nil {
+		t.Fatal("a token signed by another key verified")
 	}
 }

@@ -87,7 +87,7 @@ func DefaultMiddleware(cfg Config) ([]web.Middleware, error) {
 	if len(cfg.CORS.AllowedOrigins) > 0 {
 		mw = append(mw, c)
 	}
-	if cfg.JWT != (JWTConfig{}) {
+	if !cfg.JWT.isZero() {
 		a, err := Authenticate(cfg.JWT)
 		if err != nil {
 			return nil, err

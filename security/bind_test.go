@@ -52,7 +52,7 @@ security:
 	if len(got.CORS.AllowedOrigins) != 1 || got.CORS.AllowedOrigins[0] != "https://app.example.com" {
 		t.Errorf("allowedOrigins = %v", got.CORS.AllowedOrigins)
 	}
-	if got.JWT.Issuer == "" || got.JWT.Audience == "" || got.JWT.JWKSURL == "" {
+	if got.JWT.Issuer == "" || len(got.JWT.Audience) != 1 || got.JWT.JWKSURL == "" {
 		t.Errorf("jwt = %+v", got.JWT)
 	}
 	// The whole section must survive as something Authenticate accepts, or
