@@ -9,6 +9,24 @@
 // Delivery is at-least-once. A handler still running when the stop budget
 // expires has its context cancelled with its offset uncommitted, so the
 // message goes to whoever picks up the partition. Handlers must be idempotent.
+//
+// A consumer group the broker has never seen starts at the NEWEST record, so
+// nothing published before the group existed is delivered. That is the Java
+// client's default rather than franz-go's, and it means a typo in kafka.group
+// skips a window rather than replaying the whole topic. A group that has
+// committed always resumes from its commit.
+//
+// That default has one cost, and it is the single exception to at-least-once
+// above. Between a group's first join and its first commit on a partition,
+// the group owns no offset for it. If the partition moves to another member
+// in that window — a second pod starting seconds after the first, on a group
+// nobody has run before — the new owner applies the same rule and starts at
+// the newest record, so whatever the previous owner had in flight is never
+// handled. Measured against a real broker at 3 records in 120 (#51). The
+// window closes at the first commit and cannot reopen, and it is what
+// "latest" means on any Kafka client rather than anything this package does.
+// A service that cannot accept it wants its group's offsets seeded before it
+// starts.
 package kafka
 
 import (
@@ -198,6 +216,16 @@ func (c *Component) Start(ctx context.Context) (<-chan error, error) {
 		// The whole delivery guarantee rests on committing after the handler
 		// returns, so the client must never commit on its own.
 		kgo.DisableAutoCommit(),
+		// Where a group with no usable committed offset begins: the next
+		// record, not the oldest on the topic. franz-go's own default is the
+		// oldest, which turns a typo in kafka.group into a replay of the
+		// whole retention window, and differs from the Java client every
+		// operator's expectation is built on. It decides nothing about a
+		// group that has committed — that one always resumes from its commit
+		// — so at-least-once is untouched. Measured against a real broker and
+		// chosen deliberately before the surface froze (#51); docs/spec.md 12
+		// means this default cannot move again inside v1.
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd()),
 	}
 	if c.cfg.TLS {
 		opts = append(opts, kgo.DialTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}))

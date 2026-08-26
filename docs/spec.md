@@ -2156,8 +2156,8 @@ pinning.
 | `connectrpc.com/grpcreflect` | v1.3.0 | `goboot/grpc/reflection` | [#29](https://github.com/squall-chua/go-boot/issues/29) | the reflection protos, both v1 and v1alpha, and the static reflector. **One extra linked module**, same reason |
 | `connectrpc.com/otelconnect` | v0.9.0 | `goboot/trace/rpc` | [#12](https://github.com/squall-chua/go-boot/issues/12) | RPC spans. Separate subpackage, and `goboot/trace` filters `otelhttp` for RPCs or you get two nested spans |
 | `github.com/fergusstrange/embedded-postgres` | v1.34.0 | `goboot/db/dbtest` | [#13](https://github.com/squall-chua/go-boot/issues/13) | 3 linked modules against `testcontainers-go`'s 45, and no Docker daemon. Real PostgreSQL 18.3 up in 2.77s |
-| `github.com/twmb/franz-go` | v1.21.6 | `goboot/kafka` | [#35](https://github.com/squall-chua/go-boot/issues/35) | **4 linked modules**, +7,352,423 bytes stripped — the second-largest entry in this table, and the one row where module count beat size. `segmentio/kafka-go` is 3 modules and 2.51 MB lighter but is still `v0.4.x` after years, and a `v0` under go-boot's own `v1` promise inherits "may break anything" permanently; `IBM/sarama` is 15 modules including a Kerberos stack and `go-spew`; `confluent-kafka-go` **does not compile with `CGO_ENABLED=0`**, measured. SASL and TLS cost **no extra module and 57,344 bytes**, so the count above is the whole price |
-| `github.com/twmb/franz-go/pkg/kmsg` | v1.13.1 | `goboot/kafka` (indirect) | [#35](https://github.com/squall-chua/go-boot/issues/35) | **Nobody chose this one; it arrives.** franz-go splits its Kafka protocol types into a second module, so the client's 4 is 2 of its own plus `klauspost/compress` and `pierrec/lz4` |
+| `github.com/twmb/franz-go` | v1.21.6 | `goboot/kafka` | [#35](https://github.com/squall-chua/go-boot/issues/35) | **4 linked modules**, +7,352,423 bytes stripped — the second-largest entry in this table, and the one row where module count beat size. `segmentio/kafka-go` is 3 modules and 2.51 MB lighter but is still `v0.4.x` after years, and a `v0` under go-boot's own `v1` promise inherits "may break anything" permanently; `IBM/sarama` is 15 modules including a Kerberos stack and `go-spew`; `confluent-kafka-go` **does not compile with `CGO_ENABLED=0`**, measured. SASL and TLS cost **no extra module and 57,344 bytes**, so the count above is the whole price. **Amended by [#51](https://github.com/squall-chua/go-boot/issues/51):** the version-line argument no longer stands alone. Against a three-broker cluster with two group members and a rolling restart of all three brokers, franz-go delivered 30,000 of 30,000 with **0 duplicated, 0 dropped and 0 errors returned to the caller**; segmentio came through the same run with **0 dropped** but 18 duplicates and 14 commit errors the caller must retry. Both are correct on at-least-once — see [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) |
+| `github.com/twmb/franz-go/pkg/kmsg` | v1.13.1 | `goboot/kafka` | [#35](https://github.com/squall-chua/go-boot/issues/35) | **Nobody chose this one; it arrives.** franz-go splits its Kafka protocol types into a second module, so the client's 4 is 2 of its own plus `klauspost/compress` and `pierrec/lz4`. **Amended by [#51](https://github.com/squall-chua/go-boot/issues/51):** direct, not indirect, on the same footing as protobuf under #28 — `goboot/kafka`'s broker test reads the group's committed offset with an `OffsetFetch` it builds by name, rather than linking franz-go's `kadm`, which would be a module the golden file does not have. Nothing a user links changes |
 | `github.com/rabbitmq/amqp091-go` | v1.14.0 | `goboot/rabbit` | [#35](https://github.com/squall-chua/go-boot/issues/35) | **1 linked module with zero transitive dependencies**, +3,825,767 bytes stripped. The RabbitMQ team's own continuation of `streadway/amqp`, and the only `v1` client for AMQP 0-9-1 in Go — there was no close call to weigh, unlike the Kafka side. Most of the size is `crypto/tls`, which stops being dead code the moment a connection is encrypted. Its `Config.Recovery` auto-reconnect is **not** used: it is opt-in and marked Experimental upstream, and [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) explains why a `v1` promise is not built on that |
 | `github.com/golang-jwt/jwt/v5` | v5.3.1 | `goboot/security` | [#34](https://github.com/squall-chua/go-boot/issues/34) | **1 linked module with zero transitive dependencies**, +36 KB on its own — measured against `go-jose/v4` at 1 module and +495 KB and `coreos/go-oidc/v3` at 3 modules and +1.17 MB. Wiring the Starter costs **+708,608 bytes**, mostly stdlib crypto that stops being dead code once something verifies a signature; [4.7](#47-gobootsecurity--the-security-starter) has both numbers and why they differ. It ships no JWKS client, so `goboot/security` writes one over `crypto/rsa` and `crypto/ecdsa` |
 
@@ -2394,20 +2394,41 @@ Written down as gaps, not left out.
   whitelist, so `main` would need a second mount line, and `act.MountOn(srv)` being one line that is
   correct in both port modes is the Actuator's best property. Half the weight ADR `0010` split
   `traced.Full` out for, for an API cost ADR `0003` was written to avoid.
-- **`goboot/kafka` and `goboot/rabbit` are frozen and have never met a real broker.** This is the
-  one gap on this list that is about **confidence** rather than behaviour, and it is written as a
-  gap because [#50](https://github.com/squall-chua/go-boot/issues/50) put both packages inside the
-  `v1` promise, where a wrong shape can no longer be fixed. Their shutdown behaviour is proven
-  against fake fetch loops — `Component.consume` takes `poll` and `commit` as parameters so the
-  tests can drive the real loop with no cluster behind it — which is the right test for what
-  [#49](https://github.com/squall-chua/go-boot/issues/49) settled and says nothing about
-  rebalancing, redelivery under load, or a coordinator moving mid-commit. `goboot/rabbit`'s
-  `redial` is exercised the same way. [14](#14-the-messaging-starter-specified-and-in-the-v1-promise)
-  also still names one unmeasured claim: franz-go was chosen over `segmentio/kafka-go` on version
-  line and module count, not on consumer-group correctness.
-  [#51](https://github.com/squall-chua/go-boot/issues/51) is what closes this, and it should close
-  **before** the tag rather than after — a bug behind the API is a `v1` fix, but a wrong signature
-  is a `v2`. ([#50](https://github.com/squall-chua/go-boot/issues/50))
+- **`goboot/kafka` and `goboot/rabbit` had never met a real broker. Closed by
+  [#51](https://github.com/squall-chua/go-boot/issues/51), and it found one thing.** This was the
+  one gap on this list that was about **confidence** rather than behaviour, written down because
+  [#50](https://github.com/squall-chua/go-boot/issues/50) put both packages inside the `v1` promise,
+  where a wrong shape can no longer be fixed. Both now run against a real broker in Docker —
+  a rebalance with a handler mid-flight, a redelivery after a `Stop` that timed out, and a broker
+  that hangs up on `rabbit.redial` — and the unmeasured client comparison has been run.
+  [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) carries what each one said. **No
+  signature changed** — one frozen default did, and it is the bullet below.
+- **A new `goboot/kafka` consumer group begins at the newest record, and that is the one exception
+  to at-least-once.** franz-go's own reset offset is the *oldest* record on the topic, which turns a
+  typo in `kafka.group` into a replay of the whole retention window. `Start` overrides it to the
+  newest, matching the Java client every operator's expectation is built on. The **default** could
+  not wait for a minor release, because [12](#12-versioning-and-release-policy) freezes it at the
+  tag; `TestARealBrokerStartsANewGroupAtTheEndOfTheTopic` in `kafka/kafka_broker_test.go` pins it.
+
+  **What it costs was measured rather than reasoned about, and it is not free.** Between a group's
+  first join and its first commit on a partition, the group owns no offset for it. If that
+  partition moves to another member inside that window — a second pod starting seconds after the
+  first, on a group nobody has run before — the new owner applies the same rule, starts at the
+  newest record, and whatever the previous owner had in flight is never handled. #51 measured it
+  three ways on a real broker, at 120 records through a rebalance, six runs each:
+
+  | Reset offset | Group's state at the rebalance | Result |
+  |---|---|---|
+  | newest (shipped) | no commit yet | **2 of 6 runs lost 3 records**, the same three each time |
+  | oldest (franz-go's own) | no commit yet | 6 of 6 clean — the new owner replays instead |
+  | newest (shipped) | one commit made first | 6 of 6 clean, and **0 duplicates** |
+
+  The third row is the shape of the window: it closes at the first commit and cannot reopen. This
+  is what `latest` means on any Kafka client rather than anything this Starter does, and the
+  alternative was a permanent replay hazard on every mistyped group id. A service that cannot
+  accept it seeds its group's offsets before it starts. The other half left undone is the missing
+  knob — a `startAt` key is a legal `v1` minor addition, and none is added now because no user has
+  asked for one. ([#51](https://github.com/squall-chua/go-boot/issues/51))
 
 ---
 
@@ -2525,15 +2546,22 @@ reasonably build on.
 > none of them. There were two answers and no third: both join the promise, or the tag waits until
 > they are ready to be frozen.
 >
-> **#50 chose the first, and what that costs is on the record rather than in a shrug.** Neither
-> Starter has met a real broker. Their shutdown behaviour is proven against fake fetch loops, which
-> is the right test for what [#49](https://github.com/squall-chua/go-boot/issues/49) settled and
-> says nothing about rebalancing, redelivery under load, or a coordinator moving mid-commit.
-> [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) also still names one unmeasured claim:
-> franz-go was chosen over `segmentio/kafka-go` on version line and module count, and the
-> consumer-group correctness comparison needs a real cluster and has not been run. **Every one of
-> those is now a bug to fix inside `v1` rather than a signature to change**, because the signatures
-> are frozen. That is the trade, and it was made deliberately.
+> **#50 chose the first, and what that costs is on the record rather than in a shrug.** At the time
+> neither Starter had met a real broker: their shutdown behaviour was proven against fake fetch
+> loops, which is the right test for what
+> [#49](https://github.com/squall-chua/go-boot/issues/49) settled and says nothing about
+> rebalancing, redelivery under load, or a coordinator moving mid-commit, and
+> [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) named one unmeasured claim on top
+> of that — franz-go chosen over `segmentio/kafka-go` on version line and module count, with the
+> consumer-group correctness comparison needing a real cluster. **Every one of those was going to be
+> a bug to fix inside `v1` rather than a signature to change**, because the signatures are frozen.
+> That was the trade, and it was made deliberately.
+>
+> **[#51](https://github.com/squall-chua/go-boot/issues/51) then paid it off before the tag rather
+> than after.** Both Starters now run against a real broker in Docker, the comparison has been run
+> against a three-broker cluster, and
+> [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) carries both results. The trade
+> above is what the record should still show was accepted; it is no longer what is owed.
 >
 > **The `v1.0.0` release note names both packages**, under the second bullet of
 > [what every release note carries](#what-every-release-note-carries). A package arriving breaks
@@ -2912,7 +2940,7 @@ baseline of 1,589,410 bytes. "Linked" counts non-stdlib module roots the way
 | Candidate | Version | Linked | Stripped delta | Verdict |
 |---|---|---|---|---|
 | `github.com/twmb/franz-go` | v1.21.6 | 4 | **+7,352,423 B (+7.35 MB)** | **chosen for Kafka** |
-| `github.com/segmentio/kafka-go` | v0.4.51 | 3 | +4,845,671 B (+4.85 MB) | smallest, but still `v0` |
+| `github.com/segmentio/kafka-go` | v0.4.51 | 3 | +4,845,671 B (+4.85 MB) | smallest, but still `v0`; consumer group measured by [#51](https://github.com/squall-chua/go-boot/issues/51) |
 | `github.com/IBM/sarama` | v1.60.2 | 15 | +6,385,767 B (+6.39 MB) | drags Kerberos and `go-spew` |
 | `github.com/confluentinc/confluent-kafka-go/v2` | v2.15.0 | 1 | +10,692,622 B, **cgo build only** | **cannot build without cgo** |
 | `github.com/rabbitmq/amqp091-go` | v1.14.0 | 1 | **+3,825,767 B (+3.83 MB)** | **chosen for RabbitMQ** |
@@ -2945,15 +2973,38 @@ and 2.51 MB lighter than franz-go, which under go-boot's usual rule would win. I
 under a package covered by go-boot's own `v1.x` promise means inheriting that risk permanently.
 franz-go is `v1.21.6`, tagged 2026-08-12.
 
-> **One claim here is not measured, and it is the one to check before writing code.** The prose
-> above rests on version lines and module counts, all of which were measured. It does **not** rest
-> on a comparison of the two clients' consumer-group correctness — cooperative rebalancing,
-> partition revocation during a commit, behaviour on a coordinator move — because none of that can
-> be measured without a real broker, and none was run. If the human reviewing this section believes
-> segmentio's consumer group is good enough, 2.51 MB and one module are a real argument for it, and
-> nothing else in this section changes: the API below is written against neither client's types.
-> The test that settles it is a three-broker cluster, one consumer group of two members, a rolling
-> restart, and a count of duplicated and dropped messages on each client.
+> **That claim was not measured when this was written. It is now, and the choice stands.**
+> [#51](https://github.com/squall-chua/go-boot/issues/51) ran the test this note asks for: a
+> three-broker KRaft cluster, one consumer group of two members on a six-partition topic, 30,000
+> records, a 20 ms handler, and a rolling restart of all three brokers while both members were
+> still mid-flight. Both clients kept `goboot/kafka`'s own discipline — auto-commit off, handle the
+> record, commit it — and both used the same franz-go producer, so the consumer group is the only
+> thing that differs.
+>
+> **The harness is `docs/measurements/kafka-client-compare/`, kept rather than thrown away.** It is
+> a separate module, because it links `segmentio/kafka-go` and
+> [7](#7-dependencies-and-the-ticket-that-chose-each-one) fixes go-boot's dependency list against
+> that; `go build ./...` and `go test ./...` never see it. It is kept because this table prints a
+> number, and a number in this document has to be one a reader can re-run rather than one they have
+> to believe.
+>
+> | Client | Produced | Distinct | Deliveries | Duplicated | Dropped | Errors the caller saw |
+> |---|---|---|---|---|---|---|
+> | `twmb/franz-go` v1.21.6 | 30,000 | 30,000 | 30,000 | **0** | **0** | **0** |
+> | `segmentio/kafka-go` v0.4.51 | 30,000 | 30,000 | 30,018 | **18** | **0** | **14** |
+>
+> **Neither client dropped a message, so at-least-once holds on both.** The version-line argument
+> above is not overturned, and it did not need rescuing. What separates them is the last column:
+> every one of segmentio's 14 was a commit the caller has to deal with — ten
+> `[16] Not Coordinator For Group` as each coordinator moved, four writes to a socket the restart
+> had already closed — and each one is an uncommitted offset, which is where the 18 duplicates came
+> from. franz-go retried the same coordinator moves inside the client and returned nothing.
+>
+> So the difference is real but small, it is on the side of the client already chosen, and it costs
+> the caller retry code rather than correctness. **A reviewer who still prefers segmentio's 2.51 MB
+> and one module has a defensible case**, and nothing else in this section changes: the API below is
+> written against neither client's types. What has changed is that the case would now be made
+> against a measurement rather than into a gap.
 
 **RabbitMQ has no close call.** `amqp091-go` is the RabbitMQ team's own continuation of
 `streadway/amqp`, it is `v1`, and it links **one module with zero transitive dependencies**. The
@@ -3005,7 +3056,9 @@ func New(cfg Config, log *slog.Logger, h Handler) (*Component, error)
 
 func (c *Component) Name() string                     // "kafka:" + cfg.Topic
 func (c *Component) Tier() goboot.Tier                // TierTransport
-func (c *Component) Start(ctx) (<-chan error, error)  // dial, join the group, start the loop
+func (c *Component) Start(ctx) (<-chan error, error)  // dial, join the group at the NEWEST
+                                                      // record if it is new to the broker,
+                                                      // start the loop
 func (c *Component) Drain(ctx context.Context)        // stop fetching; returns at once
 func (c *Component) Stop(ctx context.Context) error   // wait out in-flight handlers within
                                                       // ctx, then cancel them, leave the
@@ -3037,7 +3090,12 @@ type Config struct {
 	URL      string `yaml:"url"`      // required, amqp:// or amqps://; from an environment variable
 	Queue    string `yaml:"queue"`    // required
 	Prefetch int    `yaml:"prefetch"` // 1; the AMQP QoS window
-	RequeueOnError bool `yaml:"requeueOnError"` // true; Nack(requeue) when the handler errors
+
+	// DiscardOnError Nacks without requeue, which dead-letters the message
+	// where the queue has a dead-letter exchange and discards it where it
+	// does not. The default requeues, because losing a message to a
+	// transient handler failure is the worse mistake.
+	DiscardOnError bool `yaml:"discardOnError"` // false
 }
 
 type Message struct {
@@ -3158,6 +3216,71 @@ still running; `Stop` blocks until that handler returns; and `Stop` gives up, ca
 context and returns anyway once its own context expires. The third is the one that would catch a
 hung shutdown, so it is the one not to skip. None needs a broker.
 
+### What a real broker said
+
+Settled by [#51](https://github.com/squall-chua/go-boot/issues/51). Both packages' shutdown
+behaviour was proven against fake fetch loops, which is the right test for what
+[#49](https://github.com/squall-chua/go-boot/issues/49) settled and says nothing about a rebalance,
+a redelivery or a coordinator moving mid-commit. [#50](https://github.com/squall-chua/go-boot/issues/50)
+then froze both surfaces, so the tag was the last moment a wrong shape could still be fixed. These
+ran before it.
+
+`internal/brokertest` starts a real Kafka and a real RabbitMQ in Docker. It **shells out to the
+docker CLI and links nothing**, for the reason `goboot/db/dbtest` chose `embedded-postgres` over
+`testcontainers-go` — 3 linked modules against 45 ([#13](https://github.com/squall-chua/go-boot/issues/13)).
+There is no embedded Kafka and no embedded RabbitMQ, so the daemon is unavoidable here; the 45
+modules are not. `.github/module-counts.txt` **did not move**: `goboot/kafka 6 6` and
+`goboot/rabbit 3 3` are what they were.
+
+**They are gated on `GOBOOT_BROKER_TESTS=1`, and `.github/workflows/ci.yml` sets it.** The two
+images are about 950 MB, which is the same objection the PostgreSQL cache step in that workflow
+already makes in as many words — "without this it is pulled from Maven Central on every run, which
+puts a third-party host in the path of the whole test job". So they are a gate in CI, where the
+daemon is present and the gate is wanted, and an opt-in everywhere else. Without the variable
+[8.3](#83-the-ordinary-gates)'s `go test ./...` skips them and still passes.
+
+| What ran | Against | What it asserts |
+|---|---|---|
+| A rebalance with a handler mid-flight | one topic, 4 partitions, 120 records, a second member joining while the first was working, **on a group given a committed offset first** | every record reaches a handler, and the second member handled some of them, so the partition genuinely moved. Duplicates are legal and are logged rather than pinned, because the count is a property of the timing; six runs gave 121 deliveries for 120 records and no duplicates at all. **The warm-up commit is load-bearing** — without it this fails about one run in three, and [9. Known gaps in v1](#9-known-gaps-in-v1) is what that turned out to be |
+| A `Stop` that timed out, Kafka | a handler that ignores its cancelled context | `Stop` returns the budget error, **the group's committed offset does not move** — read back from the broker with an `OffsetFetch`, not inferred — and a fresh member of the same group is given all three records again |
+| A `Stop` that timed out, RabbitMQ | the same handler | the delivery is unacknowledged, and the next consumer is given it with `Redelivered` **true** |
+| A broker that hangs up | `rabbitmqctl close_all_connections` against a live broker | `redial` reconnects and resumes, a message published only after the hang-up arrives, and `Check` stays nil — a dropped connection is not a death |
+| A queue that is gone | `QueueDelete` under a running consumer | `permanent()` calls it fatal, the death channel carries it and `Check` reports it. This is the other half of `redial` and no checkbox on #51 asked for it; it is here because [the API section above](#the-api) promises "the topic or queue gone" reaches the death channel, and nothing had ever asked a broker whether it does |
+
+**No signature changed. One frozen default did, and it is the whole finding.** franz-go's reset
+offset is the **oldest** record on the topic, so before #51 a service that typed a fresh
+`kafka.group` against a topic with a month of retention replayed the month — and the Java client
+every operator's expectation is built on would not have. `Start` now passes
+`kgo.ConsumeResetOffset(kgo.NewOffset().AtEnd())`.
+[12](#12-versioning-and-release-policy) freezes defaults for the life of `v1`, which is why this
+could not be left for a minor release the way the missing `startAt` key can be.
+
+> **It was not a free swap, and the cost is on the record rather than in a shrug.** The reset
+> decides where a group with **no committed offset** begins — and that includes a partition moving
+> to a member of a group that has not committed yet, not only a group's first join. Inside that
+> window the new owner starts at the newest record and skips whatever the old owner had in flight,
+> which is a lost message rather than a duplicated one. It was found by the rebalance test above
+> failing one run in three, and it is measured, both ways round, in
+> [9. Known gaps in v1](#9-known-gaps-in-v1). The window closes at the first commit and cannot
+> reopen. **This is the single exception to the at-least-once claim** in `goboot/kafka`'s own doc
+> comment, which says so. It was taken deliberately: the alternative is a permanent replay hazard
+> on every mistyped group id, and `latest` behaves this way on every Kafka client.
+
+**One drift turned up, and it was in this document rather than in the code.** The `rabbit.Config`
+block above named a key `requeueOnError`, defaulting true, that has never existed — the code
+shipped `discardOnError`, defaulting false. The two describe the same behaviour from opposite ends,
+and the code is what [12](#12-versioning-and-release-policy) freezes, so the block was corrected to
+it. It is recorded here rather than passed off silently because a spec that names a config key
+nobody can set is the failure this section is supposed to catch.
+
+> **One trap, written down so nobody pays for it twice.** RabbitMQ accepts AMQP connections
+> part-way through boot, and a consumer registered inside that window is never sent the cancel when
+> its queue is deleted: the delivery stream stays open and silent, and `Check` reports healthy. It
+> looks exactly like a bug in `redial` and is not one. `brokertest` waits for `rabbitmqctl
+> await_startup` because of it — and runs it as `--user rabbitmq`, because `docker exec` is root
+> and root's first `rabbitmqctl` during boot leaves the node's own Erlang cookie unreadable, which
+> kills the container.
+
 ### What changed in this document, and in CI, when the code landed
 
 **Both packages are built.** This list was written before them, as a prediction of what building
@@ -3211,6 +3334,11 @@ module-count predictions held exactly: `goboot/rabbit 3 3` and `goboot/kafka 6 6
   consumer cannot join it, because `Start` needs a broker; what each consumer package proves
   instead is its own half — that `Drain` lets go, `Stop` waits, and `Stop` gives up — against a
   fake fetch loop.
+- **Neither package had met a real broker, and [#51](https://github.com/squall-chua/go-boot/issues/51)
+  closed that before the tag.** It is the one entry on this list written after the fact rather than
+  as a prediction, because nothing here predicted it: the list above was about what building the
+  packages would disturb, and what a real broker says is not a document to amend but a fact to go
+  and get. [What a real broker said](#what-a-real-broker-said) is that fact.
 - **Neither package is on the ten-minute path** of [13](#13-docs-and-examples), and **no rule
   requires either an example directory.** This was worth checking rather than assuming: [8.2](#82-ci-builds-both-forms-of-every-preset)'s
   one-directory-per-Preset rule is about Presets, and no Preset wires a consumer; [13](#13-docs-and-examples)'s

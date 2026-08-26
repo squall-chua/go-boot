@@ -65,4 +65,14 @@ jobs:
         # explicit form against a real PostgreSQL and asserts they serve the
         # same service, so a copy that still compiles but has drifted fails
         # here rather than passing quietly.
+        #
+        # GOBOOT_BROKER_TESTS turns on internal/brokertest, which runs
+        # goboot/kafka and goboot/rabbit against a real Kafka and a real
+        # RabbitMQ in Docker (docs/spec.md 14, #51). It is off by default
+        # because the two images are about 950 MB: the same argument the
+        # PostgreSQL cache above makes about what belongs in the path of the
+        # whole test job. Here the daemon is present and the gate is wanted,
+        # so it is on.
+        env:
+          GOBOOT_BROKER_TESTS: "1"
         run: go test ./...
