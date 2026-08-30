@@ -1,0 +1,12 @@
+# buf drives the code generation for this service. go-boot never runs codegen
+# and never imports generated code: the generated package is passed to it as a
+# value, so a repository with existing protos changes nothing here.
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+breaking:
+  use:
+    - FILE

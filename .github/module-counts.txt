@@ -1,6 +1,7 @@
 # package / modules a user links (4) / modules its tests link (5)
 goboot                    2   2
 goboot/actuator          11  11
+goboot/cmd/goboot         0   0
 goboot/db                 7  24
 goboot/db/dbtest         15  15
 goboot/grpc               4   4

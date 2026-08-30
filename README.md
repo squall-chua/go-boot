@@ -15,8 +15,8 @@ Early. What works today is HTTP routes served by a real listener, started and st
 order, with a clean shutdown on SIGTERM; config from a file and the environment; the default
 middleware set with the response helpers below; the Actuator; the database Starter, with a
 real PostgreSQL for tests; the gRPC Transport; tracing; the Security Starter; and the Presets. That is the whole library
-surface `docs/spec.md` locks, and CI keeps the import-leak check on it. What is left is the
-Scaffold, which that spec defers past v1.
+surface `docs/spec.md` locks, and CI keeps the import-leak check on it. The Scaffold has landed
+too: `goboot new` writes a project, and [Start a new service](#start-a-new-service) is the command.
 
 ## Install
 
@@ -157,12 +157,39 @@ what a Preset wires, so the copy ships as compiling code and one test drives bot
 
 ### Where to go next
 
-Everything below is reference, read as you need it: the default middleware, security, the Actuator,
-gRPC, tracing, the database and the Preset. Most of those sections quote fragments and single lines
+Everything below is reference, read as you need it: the Scaffold, the default middleware, security,
+the Actuator, gRPC, tracing, the database and the Preset. Most of those sections quote fragments and single lines
 rather than whole wiring, and a fragment has no file it can be lifted from whole, so it is not
 checked. Where a block *is* a whole excerpt it carries a `<!-- from: ... -->` comment, and CI
 checks it against that file exactly as it does on the path above. The marker is the whole rule:
 marked is checked, unmarked is not.
+
+## Start a new service
+
+The three stops above are directories in this repository. To get the same thing in a directory of
+your own, run the Scaffold:
+
+```
+go run github.com/squall-chua/go-boot/cmd/goboot@latest new github.com/acme/orders
+cd orders
+go mod tidy
+go run . migrate   # needs the PostgreSQL named in app.yaml
+go run .
+```
+
+It writes six files: a `main.go` with one call to `preset.Full` and the `orders migrate`
+subcommand, a `service.go`, an `app.yaml`, one goose migration, a `README.md` and a `go.mod`. Add
+`-grpc` and it writes three more — `buf.yaml`, `buf.gen.yaml` and a sample `.proto` — plus the gRPC
+adapter type, and then `buf generate` has to run before the project compiles.
+
+**One flag, and that is on purpose.** A flag exists only where it changes which *files* are
+written. Everything else you might want different — tracing, the Actuator whitelist, the database —
+is lines in a `main.go` you own from the first second, and deleting lines needs no flag.
+
+**It copies a project, not a template.** The two it copies live in `cmd/goboot/scaffold`, they are
+`package main` packages this repository compiles and vets, and CI would fail if either stopped
+building. So what you get is code CI builds. See
+[`docs/spec.md` 15](docs/spec.md#15-the-scaffold-cli).
 
 ## The default middleware
 

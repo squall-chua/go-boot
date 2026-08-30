@@ -1,0 +1,28 @@
+# The embedded defaults layer. A file of the same name on disk is laid over
+# this one, and MYSERVICE_ environment variables over that.
+log:
+  level: info
+  format: json
+web:
+  addr: ":8080"
+actuator:
+  # The whitelist. Drop metrics from this list and /actuator/metrics answers
+  # 404: it is never registered at all.
+  expose: [livez, readyz, info, metrics, loglevel]
+db:
+  # A throwaway local database, so `go run .` works with nothing else set. A
+  # REAL password does not belong in this file: it is compiled into the
+  # binary. Send it in MYSERVICE_DB__DSN, which is the layer that wins.
+  dsn: "postgres://myservice:myservice@localhost:5432/myservice?sslmode=disable"
+  # The name blank-imported in main.go, and what the goose dialect comes from.
+  driver: pgx
+  # maxOpenConns defaults to 10. A stock PostgreSQL allows about 97, so that
+  # is TEN PODS before the database runs out.
+  #
+  # migrateOnStart stays OFF, which is go-boot's own default and the right one
+  # for anything you deploy: in a rollout every pod would race every other pod.
+  # The service refuses to start on a pending migration instead, and the way in
+  # is `myservice migrate`, which the README says when to run. Turn this on for
+  # local development if you would rather not run that command by hand.
+  migrateOnStart: false
+greeting: "hello"

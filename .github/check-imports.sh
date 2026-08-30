@@ -130,11 +130,19 @@ report "3. goboot/db links no driver" "$drv"
 #    line names each column so they are never read as the same thing.
 #    Assertion 4 goes on counting exactly what it always counted.
 #
-#    Two directories are left out. `examples` holds binaries, and their weight
-#    is measured in docs/spec.md 6 rather than pinned here. `internal` is
-#    generated protobuf code that no user can import, so its module count is a
-#    fact about buf's output, not about what go-boot links — but base reaching
-#    it is still caught, by assertion 1 above.
+#    Three directories are left out. `examples` holds binaries, and their
+#    weight is measured in docs/spec.md 6 rather than pinned here. `internal`
+#    is generated protobuf code that no user can import, so its module count
+#    is a fact about buf's output, not about what go-boot links — but base
+#    reaching it is still caught, by assertion 1 above. `cmd/goboot/scaffold`
+#    holds the two projects the Scaffold copies, which are examples by another
+#    name: they import the heavy packages on purpose and their counts move
+#    whenever one is edited (docs/spec.md 15).
+#
+#    `cmd/goboot` itself is NOT left out, and its row is the one that matters
+#    most in this file. `go mod tidy` walks cmd/ like anything else, so a
+#    dependency the Scaffold links lands in EVERY go-boot user's module graph.
+#    Pinned at 0 and 0, that cannot happen quietly.
 
 #    Assertion 5 inherits that exclusion, and there it leaves a real hole: `go
 #    mod tidy` walks the tests under `examples` too, so a heavy dependency
@@ -147,7 +155,7 @@ trap 'rm -f "$counts"' EXIT
 pkgs=$(go list ./...)
 {
 	echo '# package / modules a user links (4) / modules its tests link (5)'
-	for p in $(printf '%s\n' "$pkgs" | grep -vE "^$M/(examples|internal)/"); do
+	for p in $(printf '%s\n' "$pkgs" | grep -vE "^$M/(examples|internal|cmd/goboot/scaffold)/"); do
 		printf '%-23s %3d %3d\n' "goboot${p#"$M"}" \
 			"$(mods "$p" | wc -l)" "$(mods "$p" -test | wc -l)"
 	done

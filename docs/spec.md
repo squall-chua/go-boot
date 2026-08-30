@@ -2307,6 +2307,18 @@ modules and 12.4 MB against 1 module and 9.2 MB.
 > counts move whenever an example is edited, and a number that moves for ordinary work pins
 > nothing. Named here so nobody has to rediscover it.
 
+> **A third exclusion, added by [#37](https://github.com/squall-chua/go-boot/issues/37).**
+> `cmd/goboot/scaffold` holds the two projects the Scaffold copies
+> ([15](#15-the-scaffold-cli)), and they are examples by another name: `package main`, importing the
+> heavy packages on purpose, with counts that would move whenever one was edited. They are
+> excluded for the sentence above, and the door above is open on them too.
+>
+> **`cmd/goboot` itself is not excluded, and its row is the point.** `go mod tidy` walks `cmd/` like
+> any other directory, so a dependency the Scaffold linked would land in every go-boot user's module
+> graph, including a root-only user who will never run it. The Scaffold links nothing but the
+> standard library, and `goboot/cmd/goboot 0 0` is what says so. **Proven to fail** the way the rest
+> were: a blank import of `goboot/trace` in the CLI moves that row to `25 25`.
+
 ### 8.2 CI builds both forms of every Preset
 
 One example directory per Preset, holding the Preset form and the explicit form it expands to. CI
@@ -2463,14 +2475,19 @@ had to add for Java.
 
 In scope for go-boot, but not in this spec and not blocking the *building* of v1.
 
+**This list is now empty.** Every entry it ever held has left, and the paragraphs below say where
+each one went, because where an entry went is the part worth keeping. Nothing here gates a tag.
+
 **The error-handling convention has left this list.** It was the one item that gated the `v1.0.0`
 tag, and it is settled in
 [4.0. The error convention every Starter follows](#40-the-error-convention-every-starter-follows)
-([#38](https://github.com/squall-chua/go-boot/issues/38)). Nothing left below gates a tag: the one
-remaining entry is additive. (It read "four" until
+([#38](https://github.com/squall-chua/go-boot/issues/38)). (The count above read "four" until
 [#35](https://github.com/squall-chua/go-boot/issues/35) — one *ahead* of the list, because #34
 removed a bullet without touching the number. [#36](https://github.com/squall-chua/go-boot/issues/36)
-took it to one, and it is the only entry so far to leave by being refused.)
+took it to one, and it is the only entry to leave by being refused;
+[#37](https://github.com/squall-chua/go-boot/issues/37) took it to none. A written-out count is the
+trap [8.1](#81-the-import-leak-check) names about its own, and this one is now a word rather than a
+number, so it cannot drift again.)
 
 **The Security Starter has left this list.** It is settled in
 [4.7. `goboot/security`](#47-gobootsecurity--the-security-starter)
@@ -2567,13 +2584,21 @@ links a cache client unless they import one themselves.
 **What would reopen it.** Not a new client and not demand. Something a user gets wrong that a
 package can fix and a code sample cannot — the shape `goboot/db` has and this does not.
 
-- **Scaffold CLI design** — commands, flags, what it writes, how thin the generated `main` stays.
-  It already carries three requirements from this spec: write the `myservice migrate` subcommand and
-  the driver blank import; write the `buf` files and the gRPC adapter type only when gRPC is chosen;
-  and write schemas that use `timestamptz`, identity ids and `lower_snake_case`, with a way to add
-  the `version` column and the `ddl-auto=validate` CI job. Only the `version` column is
-  JPA-specific — the rest is right for everyone, so most of it should be the default rather than a
-  flag.
+**The Scaffold CLI design has left this list, and it is the last entry to do so.** It is settled in
+[15. The Scaffold CLI](#15-the-scaffold-cli)
+([#37](https://github.com/squall-chua/go-boot/issues/37)): one command, `goboot new <module-path>`,
+and one flag, `-grpc`. The entry arrived carrying three requirements and asking how thin the
+generated `main` stays. **Two are written whole; the third is written except for one piece, which is
+refused** — the `ddl-auto=validate` CI job, because that job boots a Java service and the Scaffold
+has been handed a Go module path and nothing else. That makes this the second entry to leave with a
+refusal in it, and the first where the refusal is of a piece rather than of the whole: #36 refused a
+Starter outright. §15 answers all three.
+
+The entry also predicted its own shape correctly, and that is worth recording since so much of this
+list is predictions being tested: it said most of the schema work "should be the default rather than
+a flag", and §15 goes further than the prediction — the default is everything, and the one
+JPA-specific piece is a commented-out line rather than a flag. The Scaffold ships **one** flag, and
+only because gRPC changes which *files* are written.
 
 ---
 
@@ -2614,8 +2639,8 @@ reasonably build on.
 > [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) said the Messaging Starter ships *after*
 > `v1.0.0`, and this list is what `v1.0.0` promises, and the two could not both hold at the tag. A
 > package sitting in the module with no mechanism excluding it **is** surface the moment `v1.0.0` is
-> cut — the three exclusions below are `internal/`, `examples/` and `prototypes/`, and a Starter is
-> none of them. There were two answers and no third: both join the promise, or the tag waits until
+> cut — the exclusions below, three of them when this was written, are `internal/`, `examples/` and
+> `prototypes/`, and a Starter is none of them. There were two answers and no third: both join the promise, or the tag waits until
 > they are ready to be frozen.
 >
 > **#50 chose the first, and what that costs is on the record rather than in a shrug.** At the time
@@ -2643,10 +2668,16 @@ reasonably build on.
 > [#53](https://github.com/squall-chua/go-boot/issues/53), so the release note carries it under the
 > §9 bullet rather than only here.
 
-Three things in the repository are **not** surface, and each is excluded by a mechanism rather than
+Four things in the repository are **not** surface, and each is excluded by a mechanism rather than
 by a sentence, so it cannot drift. `internal/` is excluded by the Go compiler. `examples/` are
 `package main` and cannot be imported. `prototypes/` carries its own `go.mod`, so it is a separate
-module and ships to nobody.
+module and ships to nobody. `cmd/` is the Scaffold ([15](#15-the-scaffold-cli)), and it is excluded
+by the `examples/` mechanism rather than a new one: it is `package main` too. **It is the first
+thing to appear in `.github/module-counts.txt` that is not one of the seventeen**, so the rule below
+about updating that file and this list together needs reading with that in mind — it is a rule about
+*packages a user can import*, and a `package main` is not one. `goboot/cmd/goboot` is pinned there
+at `0 0`, for the reason [15](#where-it-sits-in-the-module-and-the-one-thing-that-costs) gives:
+`go mod tidy` walks `cmd/`, so a dependency the Scaffold linked would reach every user.
 
 Surface is not only Go identifiers. **The config keys of [3. Config](#3-config) and their default
 values, and the Actuator's endpoint paths and response bodies, are surface too** — an operator's
@@ -2733,10 +2764,11 @@ Named here so nobody has to infer them from silence.
 
 ### The one thing that gates `v1.0.0`
 
-Every item in [11. Deferred past v1](#11-deferred-past-v1) is **additive**: the Security and
-Messaging Starters were new packages, the Cache Starter was refused rather than built
-([#36](https://github.com/squall-chua/go-boot/issues/36)), and the Scaffold that is left is a
-separate binary. A `v1` minor release can carry it.
+Every item in [11. Deferred past v1](#11-deferred-past-v1) was **additive**, and that list is now
+empty: the Security and Messaging Starters were new packages, the Cache Starter was refused rather
+than built ([#36](https://github.com/squall-chua/go-boot/issues/36)), and the Scaffold has landed as
+a separate binary ([#37](https://github.com/squall-chua/go-boot/issues/37)) which no user imports —
+so it adds nothing to the seventeen and nothing to the promise.
 
 Exactly one item was ever able to change the surface of an existing Starter: the error-handling
 convention ([#38](https://github.com/squall-chua/go-boot/issues/38)). It decided what every Starter
@@ -2802,9 +2834,12 @@ numbers an operator otherwise discovers at scale.
 
 - **Every break**, with the line a user has to change. On a `v1` release this list is empty by
   definition; if it is not, the tag is wrong.
-- **Every package added to the public surface**, with the one line saying when to reach for it. A
-  package arriving breaks nothing, so the bullet above never names it, and a user who reads only the
-  note learns that a version shipped and not that a Starter did.
+- **Every package added to the public surface**, with the one line saying when to reach for it, and
+  **every command** on the same footing. A package arriving breaks nothing, so the bullet above
+  never names it, and a user who reads only the note learns that a version shipped and not that a
+  Starter did. The Scaffold ([15](#15-the-scaffold-cli)) is why the bullet says *command* too: it is
+  not on the seventeen and never will be, so without those two words no bullet here would oblige a
+  note to mention that `goboot new` exists.
 - **Every Preset body change**, because a Preset user's wiring changed without their `main` changing.
 - **Every gap of §9 that was closed**, plus the §9 list as it still stands. The remaining gaps ship
   with the release; they belong in the note, not in a file the operator finds afterwards.
@@ -2914,8 +2949,9 @@ the one gap on the path, and it is named here rather than left for a reader to n
 
 ### What is not on the path, and why that is right
 
-Everything below **Where to go next** in `README.md` is reference: the default middleware, the
-Actuator, gRPC, tracing, the database and the Preset. Most of those sections quote single lines and
+Everything below **Where to go next** in `README.md` is reference: the Scaffold
+([15](#15-the-scaffold-cli)), the default middleware, the Actuator, gRPC, tracing, the database and
+the Preset. Most of those sections quote single lines and
 fragments to make a point, and **a fragment has no file it can be lifted from whole**. Those carry
 no marker and no guarantee. Marking a fragment would mean reshaping the prose around what the
 checker can verify, which is the wrong way round.
@@ -3433,11 +3469,268 @@ module-count predictions held exactly: `goboot/rabbit 3 3` and `goboot/kafka 6 6
 
 ---
 
+## 15. The Scaffold CLI
+
+Settled by [#37](https://github.com/squall-chua/go-boot/issues/37). This section is the whole
+design — the command, the one flag, what it writes and how thin the generated `main` stays — and it
+replaces the *Scaffold CLI design* entry that stood in [11. Deferred past v1](#11-deferred-past-v1).
+It is the **last** entry to leave that list, which is now empty.
+
+### One command, one flag
+
+```
+go run github.com/squall-chua/go-boot/cmd/goboot@latest new github.com/acme/orders
+go run github.com/squall-chua/go-boot/cmd/goboot@latest new -grpc github.com/acme/orders
+```
+
+There is no install step and no version to keep in step with the library: `go run …@latest` fetches,
+builds and runs in one line, and the project it writes then depends on go-boot like any other module.
+
+**`@latest` needs the repository to be public**, and while it is not, the proxy answers 404 for the
+CLI exactly as [12](#the-release-checklist) says it does for the library. The form that works
+meanwhile is the one a user with access already needs for everything else:
+`GOPRIVATE=github.com/squall-chua/* GOPROXY=direct`. That is a visibility decision, not a design
+one, and this section does not make it either.
+
+**The rule that decides which options exist: a flag exists only when it changes which FILES are
+written, never which lines.** It is ADR `0014`, because it is the decision that answers every future
+"can it also write X without Y" without reopening the argument. gRPC is the only thing in v1 that
+qualifies. It writes three extra
+files and a codegen step that has to run before the service compiles, and a user who did not ask for
+it would be deleting files and a build tool rather than lines.
+
+Everything else somebody might expect to toggle — tracing, the Actuator whitelist, the database
+itself — is lines in a `main.go` and an `app.yaml` the user owns from the first second. Deleting
+lines needs no flag, and a flag that toggles lines is a second way to configure something that is
+already configured by editing it.
+
+**That is ADR `0010`'s argument one level up**, which is why ADR `0014` cites it. A Preset takes no
+options because copying its body is the way to change what it wires. The Scaffold takes one flag
+because writing a file is the only thing the user cannot do by editing what they were handed.
+
+**It runs once, and there is no `goboot add`.** No command edits a project the Scaffold wrote
+earlier, because from the moment it is written the project is the user's and go-boot cannot know
+what has changed in it. Everything after the first run is `go get -u`, which is the same promise
+[5. The Presets](#5-the-presets-and-what-each-wires) makes about the wiring.
+
+### What it writes
+
+| File | Written | What it is |
+|---|---|---|
+| `go.mod` | always | `module` and `go`, nothing else. `go mod tidy` fills in the requires |
+| `main.go` | always | the wiring, one call to `preset.Full`, and the `myservice migrate` subcommand |
+| `service.go` | always | the Service Layer, the HTTP shell over it, and with `-grpc` the adapter type |
+| `app.yaml` | always | the embedded defaults layer, with the DSN and the Actuator whitelist |
+| `migrations/00001_greeting.sql` | always | one goose migration, following [the schema convention](#3-the-schema-conventions-are-the-default-and-the-version-column-is-one-commented-line) |
+| `README.md` | always | how to run it, what each file is, and ADR `0007`'s deployment contract. `maxOpenConns: 10` is ten pods is in here; the metrics whitelist is a comment in `app.yaml`, beside the list it is about |
+| `proto/greet/v1/greet.proto` | `-grpc` | one sample service, unary and server-streaming |
+| `buf.yaml`, `buf.gen.yaml` | `-grpc` | what `buf generate` reads. **No Makefile** — go-boot does not own the user's build tool, so the commands go in a comment |
+
+**Six files, or nine.** The `-grpc` project does not compile until `buf generate` has run once, and
+its `README.md` and the doc comment at the top of its `main.go` both say so, because a project that
+does not build on the first `go build` has to explain itself in the project rather than in the tool
+that wrote it.
+
+**One value in `app.yaml` is worth naming here: `migrateOnStart` is written `false`.** That is
+go-boot's own default and ADR `0007`'s behaviour, and it was `true` in the first draft of this
+section because `examples/full` sets it `true`. `examples/full` is a demo somebody types `go run`
+at; a scaffolded service is not. Handing a user a `README.md` that explains the pending-migration
+refusal, beside a config file that disables that refusal, is the Scaffold arguing with itself — and
+the generated `README.md` already opens with `go run . migrate`, so nothing is lost by writing the
+honest value.
+
+### The generated `main` is a compiled package in this repository
+
+This is the mechanism the whole section rests on, and it is [13](#13-docs-and-examples)'s rule
+applied to generated code: **a file kept only to be copied rots; a build failure does not.** The
+word *template* is the one `CONTEXT.md` tells the Scaffold entry to avoid, and this design is why it
+is worth avoiding: what the Scaffold copies is not a template. It is a working project.
+
+`cmd/goboot/scaffold/http` and `cmd/goboot/scaffold/grpc` are those two projects, and each is a
+`package main` that `go build ./...` compiles and `go vet ./...` checks like anything else in the
+module. The CLI embeds them with `//go:embed` and copies one. **Nothing is parsed and there is no
+placeholder syntax**, only three textual substitutions, each landing inside a string literal, a
+comment or an import path:
+
+| Replaced | With | Where it is |
+|---|---|---|
+| `MYSERVICE_` | `ORDERS_` | the `goboot.Load` prefix, and the comments naming it |
+| `myservice` | `orders` | the local DSN, the `migrate` command name in comments and the README |
+| `github.com/squall-chua/go-boot/internal/gen` | `github.com/acme/orders/internal/gen` | the `-grpc` imports and the proto's `go_package` |
+
+**So the project compiles before the copy and the copy compiles after it.** The substitution is the
+only thing a copy can break, which is why `cmd/goboot/main_test.go` parses every generated Go file
+rather than trusting it. **Proven to fail**, the way [8.1](#81-the-import-leak-check)'s assertions
+were: a fourth substitution that lands outside a literal fails the parse of every generated Go file,
+in both variants.
+
+`go.mod` is the one file generated rather than copied, for two reasons that are both about rot: a
+real `go.mod` in either directory would make that directory a nested module and take it out of
+`go build ./...`, and a pinned `go` directive would go stale the next time
+[the floor rises](#what-the-promise-does-not-cover). It is written from the toolchain running the
+command, which is at least go-boot's own floor because it built the binary.
+
+**Two complete projects cost a duplicated `app.yaml` and migration, and that price is paid on
+purpose.** A project only compiles if the files its `//go:embed` lines name sit beside it, so the
+gRPC one cannot borrow the HTTP one's `app.yaml`, and an overlay directory holding only the files
+that differ would not be a compilable package.
+[8.2](#82-ci-builds-both-forms-of-every-preset) makes the same trade for the two Preset forms, for
+the same reason.
+
+**`TestTheTwoProjectsShareWhatTheyShare` is what keeps the pair together, and it took two goes to
+aim it right.** The first version asserted byte equality on `app.yaml` and the migration and skipped
+the three files that legitimately differ — which left `main.go`, `service.go` and `README.md`, most
+of the duplication, checked by nothing. It now asserts byte equality on the two files that must be
+identical, and on the other three that the HTTP file is a **subset**: every one of its lines present,
+in order, in the gRPC one. That is the drift that actually happens — editing one of a pair and
+forgetting the other — and pointing the check at it immediately found two divergences that had been
+written in by hand, so the gRPC files were reworded to be true supersets rather than the check
+loosened to accept them.
+
+**The gRPC project compiles against go-boot's own generated package**, `internal/gen/greet/v1`,
+because that is the only generated code in this module. So the sample `.proto` the Scaffold writes
+must declare the same service as `proto/greet/v1/greet.proto`, streaming method included, or the
+project stops compiling. That is the mechanism working rather than a limitation to route around: a
+sample proto that has drifted from the adapter type beside it is exactly the rot this design exists
+to prevent.
+
+**Neither is on the ten-minute path.** [13](#13-docs-and-examples) fixes that path at
+three example directories and forbids a fourth, and these are neither examples nor a tutorial —
+they are the Scaffold's output, kept honest by the compiler for the same reason the examples are.
+
+### The three requirements it carried, answered
+
+[11](#11-deferred-past-v1)'s entry arrived with three, settled during the v1 build. Two are written
+and one is refused.
+
+#### 1. `myservice migrate` and the driver blank import — both written
+
+`main.go` dispatches on `os.Args[1] == "migrate"` and calls `db.NewProvider`, which is the one place
+the session lock is wired, so the subcommand and `Start` cannot disagree about locking
+([4.5](#45-gobootdb--the-database-starter)). `_ "github.com/jackc/pgx/v5/stdlib"` is written into the
+import block with the comment saying why go-boot did not link it.
+
+**The name was already load-bearing before this section existed.** `goboot/db` refuses to start on a
+pending migration with the text ``migrations are pending; run `myservice migrate` before the
+rollout``. That string is why [4.5](#45-gobootdb--the-database-starter) says the docs should use that
+name everywhere, and it is now the command the Scaffold actually writes — measured by running the
+generated service before `migrate` and reading the error it printed.
+
+The generated `README.md` carries ADR `0007`'s operational contract where the person deploying will
+meet it: run `migrate` as a Job from the **same image** as the pods, and let it finish **before** the
+rollout starts, because a service refuses to start on a pending migration.
+
+#### 2. The buf files and the adapter type, only when gRPC is chosen — written, behind the one flag
+
+The table above is the whole of it. `-grpc` is the only flag, and this requirement is why the rule
+that governs flags is the one it is.
+
+#### 3. The schema conventions are the default, and the `version` column is one commented line
+
+The migration the Scaffold writes uses `timestamptz`, `GENERATED BY DEFAULT AS IDENTITY` and
+`lower_snake_case`, with no flag to ask for them, because — as the entry itself said — they are right
+for everyone and only the `version` column is JPA-specific.
+
+The `version` column ships as a **commented-out line inside the `CREATE TABLE`**, placed so that
+uncommenting it leaves valid SQL, with the rule that makes it load-bearing beside it: every Go
+`UPDATE` to that table must then write `version = version + 1`, or Hibernate commits over the write
+and neither side raises an error (`docs/jpa-interop.md`). A commented line is a better answer than a
+flag here for the reason the flag rule already gives — it is a line in a file the user owns.
+
+**The `ddl-auto=validate` CI job is refused, and the reason is that the Scaffold cannot write it.**
+That job boots a Java service, and the Scaffold has been handed a Go module path and nothing else: it
+does not know where the Java service lives, what builds it, or which Spring profile to run it under.
+A generated workflow file guessing all three would be a file every user edits or deletes, and a
+generated file that is always wrong is worse than no file. What is written instead is the three
+steps, in the generated `README.md`, pointing at `docs/jpa-interop.md`, which already has them.
+
+**And the half that can be checked from Go is checked from Go, with the one caveat that makes it
+usable.** `dbtest.LintJPAConventions` ([4.5](#45-gobootdb--the-database-starter)) reads
+`information_schema` and reports a non-`lower_snake_case` identifier, a `timestamp without time zone`
+column and **a table with no `version` column**. That third one means the lint **fails on the
+migration the Scaffold ships**, because `version` is the line left commented out — so the generated
+README names the lint *and* says to reach for it only after uncommenting `version`. Recommending a
+check that fails on the file it was recommended beside is how a generated README teaches a user to
+ignore it, and this one nearly did. `docs/jpa-interop.md` already writes down that neither check
+replaces the other, which is why refusing one of them is a refusal worth stating rather than a gap
+to hide.
+
+### Measured
+
+Both projects were generated, built and run. Stripped, `go build -ldflags="-s -w"`, counting linked
+non-stdlib module roots and not counting go-boot itself — the counting rule of
+[6](#measured-weight-of-the-three-variants).
+
+| binary | modules | bytes | stripped |
+|---|---:|---:|---:|
+| `goboot new github.com/acme/orders` | 22 | 14,733,577 | 14.05 MB |
+| `goboot new -grpc github.com/acme/orders` | 23 | 15,196,425 | 14.49 MB |
+
+**gRPC costs +1 module and +462,848 bytes**, which is `connectrpc.com/connect` and the generated
+code. **These two rows are not comparable byte for byte with [6](#measured-weight-of-the-three-variants)'s**,
+and the reason is worth writing down because it nearly produced a wrong number: a generated project
+runs its own `go mod tidy`, so it resolves the latest of every dependency rather than go-boot's
+pinned graph. The first pair measured came out **1,339,392 bytes the wrong way** — the gRPC binary
+*smaller* than the plain one — until the cause was found to be `google.golang.org/protobuf` v1.36.11
+against v1.36.12, which is worth 1,802,240 bytes on its own with nothing else changed. Both rows
+above are at v1.36.12, resolved on 2026-08-30. **Re-measure both rows together or neither**; a
+scaffolded project's weight is a fact about a date as much as about go-boot.
+
+**The generated service was run, not only built**, against a real PostgreSQL from
+`goboot/db/dbtest`: `orders migrate` applied one migration and logged it, `GET /hello/world`
+returned `{"greeting":"hello world"}` read from the row that migration inserted, and `/readyz`
+answered `200 {"status":"UP"}` with the Actuator, database and web Components started in Tier order.
+The `-grpc` project's `buf generate`, `go build` and `go vet` were run too. This is the check
+[#31](https://github.com/squall-chua/go-boot/issues/31) had to add for `examples/full`, done before
+the code landed rather than after.
+
+**How thin the generated `main` stays.** Numbers with the rule that reproduces them, because
+[13](#13-docs-and-examples) has already deleted two counts that no rule reproduced — and the rule
+has to be run against **both** projects, since one rule yielding one number was the first thing this
+paragraph got wrong. `awk '/^func serve/,/^}/' main.go | wc -l` is **15** in the HTTP project and
+**19** in the gRPC one, the difference being the mount line and its three comment lines. The same
+rule over `migrate` is **28** in both. The
+wiring is one call to `preset.Full`, which is what [5](#5-the-presets-and-what-each-wires) means by
+promising *one call, not one line* — and ADR `0010` is why the Scaffold does not write the explicit
+expansion instead: doing so loses nothing today and everything on upgrade.
+
+### Where it sits in the module, and the one thing that costs
+
+`cmd/goboot`, in go-boot's own module. `docs/research/prior-art-and-module-layout.md` named the
+Scaffold as the one plausible second module later, on go-zero's `goctl` pattern, and said even that
+can wait, because a CLI in the same module costs importers nothing by the pruning mechanism that
+research measured.
+
+**It costs importers one thing, and the check pins it.** `go mod tidy` walks `cmd/` like any other
+directory, so a dependency the Scaffold linked would land in **every** go-boot user's module graph,
+including a root-only user who will never run it. So the Scaffold links **nothing but the standard
+library** — no CLI framework, no rendering engine — and
+[8.1](#81-the-import-leak-check)'s golden file pins it as the row `goboot/cmd/goboot 0 0`. Adding a
+blank import of `goboot/trace` to the CLI moves that row to `25 25`, which is how the pin was proven
+rather than assumed.
+
+The two project directories are excluded from that golden file, alongside `examples/` and
+`internal/`, for the reason [8.1](#81-the-import-leak-check) already gives about `examples/`: they
+import the heavy packages on purpose and their counts would move whenever one was edited, and
+a number that moves for ordinary work pins nothing.
+
+**The golden file gained a row and the seventeen packages of
+[12](#the-public-surface-is-these-seventeen-packages) did not move, and that is not the rule being
+broken.** The rule is that whoever adds a package to the golden file adds it to the surface list in
+the same commit; `cmd/goboot` is `package main`, so it is excluded from the surface by the same
+mechanism as `examples/` — nobody can import it — and the count stays seventeen. It is the first row
+in that file that is not a surface package, which is exactly why it is said here.
+
+---
+
 ## Sources
 
 - The map and its *Decisions so far* index: [#1](https://github.com/squall-chua/go-boot/issues/1)
 - Domain vocabulary: `CONTEXT.md`
-- Decisions that are hard to reverse: `docs/adr/0001` through `docs/adr/0010`
+- Decisions that are hard to reverse: `docs/adr/`, one per file. (This read "`0001` through
+  `0010`" until [#37](https://github.com/squall-chua/go-boot/issues/37); it had been stale since
+  `0011`, and a range in prose is the written-out count trap
+  [8.1](#81-the-import-leak-check) names, so it is now a directory rather than a number.)
 - Research, one file per research ticket: `docs/research/`
 - Measurements from writing the call sites: `docs/prototypes-notes.md` (section 7 is current;
   sections 1–6 are the old shape and are marked superseded)

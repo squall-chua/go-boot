@@ -87,5 +87,7 @@ _Avoid_: management endpoints, admin API, ops endpoints
 
 **Scaffold**:
 The CLI that writes a new project which then calls go-boot. It writes a thin `main`, so
-fixes still arrive through `go get -u` rather than regeneration.
+fixes still arrive through `go get -u` rather than regeneration. What it copies is not a
+template but **a project**: the two it copies live in this repository as ordinary `package
+main` packages that CI compiles, so use *project* for them too.
 _Avoid_: generator, template, initializr

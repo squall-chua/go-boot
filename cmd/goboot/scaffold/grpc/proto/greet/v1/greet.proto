@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+// The sample service. Rename it, or delete this file and write your own —
+// go-boot never reads it. buf generate turns it into internal/gen, and go-boot
+// takes the generated package as a value.
+package greet.v1;
+
+option go_package = "github.com/squall-chua/go-boot/internal/gen/greet/v1;greetv1";
+
+message GreetRequest {
+  string name = 1;
+}
+
+message GreetResponse {
+  string greeting = 1;
+}
+
+message GreetStreamRequest {
+  string name = 1;
+}
+
+message GreetStreamResponse {
+  string greeting = 1;
+}
+
+service GreetService {
+  rpc Greet(GreetRequest) returns (GreetResponse) {}
+
+  // Server streaming, which costs nothing: it shares the one HTTP listener,
+  // which is why web.Config has no write timeout.
+  rpc GreetStream(GreetStreamRequest) returns (stream GreetStreamResponse) {}
+}
