@@ -2448,6 +2448,11 @@ had to add for Java.
   file serving, HTTP client, password hashing, single-binary packaging.
 - **Proto transcoding, or one proto driving both Transports.** HTTP and gRPC are independent
   Starters over a shared Service Layer. Ruled against for v1; revisit only if real users ask.
+- **A Cache / Redis Starter.** The whole Component is eleven lines over `redis.NewClient`,
+  go-redis's pool defaults are already right for a service where `database/sql`'s are not, and the
+  one real decision — whether a Redis outage stops startup — is the user's, because only they know
+  whether the thing is a cache or a datastore. Measured and refused in
+  [11](#11-deferred-past-v1) ([#36](https://github.com/squall-chua/go-boot/issues/36)).
 - **A router, a handler signature, a validation library, a `DBTX` interface, a Repository
   abstraction, a Prometheus type in the public API, a gRPC code table.** Each is covered above with
   the measurement that refused it.
@@ -2461,10 +2466,11 @@ In scope for go-boot, but not in this spec and not blocking the *building* of v1
 **The error-handling convention has left this list.** It was the one item that gated the `v1.0.0`
 tag, and it is settled in
 [4.0. The error convention every Starter follows](#40-the-error-convention-every-starter-follows)
-([#38](https://github.com/squall-chua/go-boot/issues/38)). Nothing left below gates a tag: both
-remaining entries are additive. (It read "four" until
+([#38](https://github.com/squall-chua/go-boot/issues/38)). Nothing left below gates a tag: the one
+remaining entry is additive. (It read "four" until
 [#35](https://github.com/squall-chua/go-boot/issues/35) — one *ahead* of the list, because #34
-removed a bullet without touching the number.)
+removed a bullet without touching the number. [#36](https://github.com/squall-chua/go-boot/issues/36)
+took it to one, and it is the only entry so far to leave by being refused.)
 
 **The Security Starter has left this list.** It is settled in
 [4.7. `goboot/security`](#47-gobootsecurity--the-security-starter)
@@ -2494,7 +2500,73 @@ with no deadline that nothing can cancel, so a `Drain` that waits hangs the whol
 nothing able to interrupt it. The waiting moves to `Stop`, which has a real budget.
 [14](#14-the-messaging-starter-specified-and-in-the-v1-promise) has the code references and the consequences.
 
-- **Cache / Redis Starter** — likely a thin wiring Starter; unclear whether it earns its place.
+**The Cache / Redis Starter has left this list, refused rather than built.** Settled by
+[#36](https://github.com/squall-chua/go-boot/issues/36). Every other entry left by getting a section
+of this spec to point at; this one gets a bullet in
+[10. What go-boot does not do](#10-what-go-boot-does-not-do), so the reasoning stays here. The entry asked
+whether the Starter earned its place. It does not, and the test that says so is the one to reuse on
+the next thin Starter somebody proposes.
+
+**The whole Component is eleven lines.** This compiles against the current module and against
+`github.com/redis/go-redis/v9` v9.22.0:
+
+```go
+// cache is the whole Component a user writes by hand for Redis.
+type cache struct{ c *redis.Client }
+
+func newCache(addr string) *cache {
+	return &cache{redis.NewClient(&redis.Options{Addr: addr})}
+}
+
+func (c *cache) Name() string      { return "cache" }
+func (c *cache) Tier() goboot.Tier { return goboot.TierResource }
+
+func (c *cache) Start(ctx context.Context) (<-chan error, error) {
+	return nil, c.c.Ping(ctx).Err()
+}
+
+func (c *cache) Stop(context.Context) error      { return c.c.Close() }
+func (c *cache) Check(ctx context.Context) error { return c.c.Ping(ctx).Err() }
+```
+
+Everything a Starter would have been sold on is already in those eleven lines. `app.Add` puts it at
+`TierResource`, so it starts after the Actuator and before the Transports and closes after them
+([2](#2-the-component-lifecycle-contract)) — the ordered lifecycle position is a *return value*, not
+a package. The Actuator registers the `Check` under `"cache"` because `Checker` is an interface it
+already looks for, so readiness costs one method. And it has no `Drain`, for the reason
+[4.5](#45-gobootdb--the-database-starter) already writes down about the pool.
+
+**The pool argument is the one that does not transfer, and it is most of why `goboot/db` exists.**
+4.5 says Go's own defaults "are wrong for a service: unlimited open connections, 2 idle, and
+connections that live forever", and the table that fixes them is the Starter's main content.
+go-redis's defaults are not wrong: `PoolSize` is `10 * GOMAXPROCS(0)`, so it is bounded and scales
+with the pod's CPU quota; idle connections default to the pool size rather than to 2;
+`ConnMaxIdleTime` is 30m; `DialTimeout` and `ReadTimeout` are 5s; `MaxRetries` is 3 with a 10ms–1s
+backoff. A go-boot `Config` over those would restate numbers somebody else already chose well, and
+`redis.ParseURL` already parses the DSN. The other three things 4.5 does have no equivalent at all:
+there is no migration to refuse to start on, no session lock to wire in exactly one place, no
+transaction closure, and no query-layer neutrality claim to state in a return type.
+
+**The one real decision is one go-boot must not make.** `Start` above pings, so a Redis outage stops
+the service from starting. That is right when Redis is a datastore and wrong when it is a cache, and
+nothing outside the service knows which it is. A Starter would have to pick one and hand the other
+half of its users a default to fight, or expose the choice as a config key — and a config key is a
+worse answer than one line of Go the user already owns and can delete.
+
+**What it would have cost, measured.** `examples/http-actuator-config` is 11 linked module roots and
+11,628,809 bytes stripped
+([6. Measured weight of the three variants](#measured-weight-of-the-three-variants)). The same
+binary with the block above and one line in `main` is **13 and 18,297,097**: **+2 module roots**
+(`github.com/redis/go-redis/v9` and `go.uber.org/atomic`) and **+6,668,288 bytes**. That is heavier
+than `goboot/rabbit`'s whole dependency and near `goboot/kafka`'s
+([7](#7-dependencies-and-the-ticket-that-chose-each-one)), so a Cache Starter would have joined
+[8.1](#81-the-import-leak-check)'s heavy list and needed its own guard rule — a real price, for
+eleven lines of wiring. Refusing it also settles #36's second acceptance criterion for free: nobody
+links a cache client unless they import one themselves.
+
+**What would reopen it.** Not a new client and not demand. Something a user gets wrong that a
+package can fix and a code sample cannot — the shape `goboot/db` has and this does not.
+
 - **Scaffold CLI design** — commands, flags, what it writes, how thin the generated `main` stays.
   It already carries three requirements from this spec: write the `myservice migrate` subcommand and
   the driver blank import; write the `buf` files and the gRPC adapter type only when gRPC is chosen;
@@ -2661,9 +2733,10 @@ Named here so nobody has to infer them from silence.
 
 ### The one thing that gates `v1.0.0`
 
-Every item in [11. Deferred past v1](#11-deferred-past-v1) is **additive**: the Security, Messaging
-and Cache Starters are new packages and the Scaffold is a separate binary. A `v1` minor release
-can carry any of them.
+Every item in [11. Deferred past v1](#11-deferred-past-v1) is **additive**: the Security and
+Messaging Starters were new packages, the Cache Starter was refused rather than built
+([#36](https://github.com/squall-chua/go-boot/issues/36)), and the Scaffold that is left is a
+separate binary. A `v1` minor release can carry it.
 
 Exactly one item was ever able to change the surface of an existing Starter: the error-handling
 convention ([#38](https://github.com/squall-chua/go-boot/issues/38)). It decided what every Starter
