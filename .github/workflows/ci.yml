@@ -76,3 +76,34 @@ jobs:
         env:
           GOBOOT_BROKER_TESTS: "1"
         run: go test ./...
+
+  # A second job, because buf and the two protoc plugins are needed by this
+  # check and by nothing else in CI. docs/spec.md 15 named this gap as open
+  # until #55: go build ./... compiles the two projects under
+  # cmd/goboot/scaffold and TestWriteProducesAProjectThatParses proves a copy
+  # is valid Go, but nothing built the copy — and it is the gRPC copy, whose
+  # internal/gen import path is rewritten, where that gap was real.
+  scaffold:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: install buf and the two plugins
+        # The same `go install ...@latest` lines the generated README tells a
+        # user to run, so CI sets the project up the way its own README says
+        # to. GOPATH/bin is added by name rather than trusted to be on PATH.
+        run: |
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          go install github.com/bufbuild/buf/cmd/buf@latest
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
+
+      - name: CI builds what the Scaffold writes
+        # Proven to fail, the way 8.1's assertions were: a substitution that
+        # rewrites the internal/gen import path one directory short leaves
+        # every cmd/goboot test passing and fails here.
+        run: .github/check-scaffold-builds.sh

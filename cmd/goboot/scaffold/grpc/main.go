@@ -1,8 +1,8 @@
 // Command myservice is what `goboot new` writes. It is yours from the first
 // second: there are no options to set, only lines to edit.
 //
-//	go mod tidy
 //	buf generate       # writes internal/gen from proto/
+//	go mod tidy
 //	go run . migrate   # applies migrations/ against the database in app.yaml
 //	go run .           # serves on :8080
 //	curl localhost:8080/hello/world

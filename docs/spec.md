@@ -3612,14 +3612,39 @@ project stops compiling. That is the mechanism working rather than a limitation 
 sample proto that has drifted from the adapter type beside it is exactly the rot this design exists
 to prevent.
 
-**What CI does not check, said out loud.** `go build ./...` proves the two projects build and
-`TestWriteProducesAProjectThatParses` proves a copy is valid Go, but **nothing builds the copy**.
-For the HTTP project the gap is nearly empty, because no import path is rewritten there, so parsing
-is very close to compiling. It is the gRPC project where the gap is real — its `internal/gen` import
-path *is* rewritten — and that is exactly the project CI cannot build, because it needs `buf` and
-two plugins first. A cheap HTTP-only job would look like coverage and catch almost nothing, so it is
-not there. Closing this properly means putting `buf` in CI and building both, and that is a ticket
-rather than a line.
+**What CI checks, said out loud.** This paragraph said the opposite until
+[#55](https://github.com/squall-chua/go-boot/issues/55). `go build ./...` proved the two projects
+build and `TestWriteProducesAProjectThatParses` proved a copy is valid Go, but **nothing built the
+copy**. A second CI job now does: `.github/check-scaffold-builds.sh` writes both projects into a
+temporary directory, gives each a `replace` back to the checkout, runs `buf generate` in the gRPC
+one, and then `go mod tidy` and `go build ./...` in both. It is a job of its own because it installs
+`buf` and the two plugins and nothing else in CI needs them — with the same `go install ...@latest`
+lines the generated `README.md` hands the user, so CI sets the project up the way the project's own
+README says to.
+
+**It is the gRPC copy this was for.** Its `internal/gen` import path is the only thing the
+substitution rewrites, and a rewrite that parses but does not resolve is indistinguishable from a
+correct one until something compiles it. A cheap HTTP-only job stays refused for the reason
+[#37](https://github.com/squall-chua/go-boot/issues/37) gave: it would look like coverage and catch
+almost nothing.
+
+**Proven to fail**, the way [8.1](#81-the-import-leak-check)'s assertions were. Rewriting the import
+path one directory short — `github.com/acme/orders/gen` rather than `.../internal/gen` — leaves
+every test in `cmd/goboot` passing, `TestWriteLeavesNoPlaceholderBehind` included, because no
+placeholder survives and every file still parses. The new job fails on it. Dropping the substitution
+altogether fails the job too, with `use of internal package ... not allowed`.
+
+**And running the commands found a wrong one.** Three places told a `-grpc` user to run `go mod tidy`
+and then `buf generate` — the generated `README.md`, the doc comment at the top of the generated
+`main.go`, and the next-steps list the Scaffold prints when it finishes. That order does not work:
+`internal/gen` does not exist yet, so `tidy` goes looking for `github.com/acme/orders` on the
+network and fails. `buf generate` comes first in all three now, and in the job. Nothing caught it
+before because nothing had run what the README says to run.
+
+**The same run found the hole beside it.** The generated `README.md` named the two protoc plugins
+and never named `buf` itself, so the first command it hands a `-grpc` user was one it never said how
+to get. It names all three now, and the job installs those same three lines, which is what makes
+*CI sets the project up the way the README says to* a true sentence rather than a nearly true one.
 
 **Neither is on the ten-minute path.** [13](#13-docs-and-examples) fixes that path at
 three example directories and forbids a fourth, and these are neither examples nor a tutorial —

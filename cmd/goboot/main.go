@@ -87,11 +87,14 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("wrote %s/ (%d files)\n\nnext:\n  cd %s\n  go mod tidy\n", name, written, name)
+	fmt.Printf("wrote %s/ (%d files)\n\nnext:\n  cd %s\n", name, written, name)
 	if *grpc {
+		// Before `go mod tidy`, not after. internal/gen is not checked in, so
+		// until buf has written it tidy goes looking for the user's own module
+		// on the network and fails. The generated README says the same order.
 		fmt.Println("  buf generate")
 	}
-	fmt.Printf("  go run . migrate\n  go run .\n\nRead %s/README.md before you deploy it.\n", name)
+	fmt.Printf("  go mod tidy\n  go run . migrate\n  go run .\n\nRead %s/README.md before you deploy it.\n", name)
 	return nil
 }
 
