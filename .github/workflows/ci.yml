@@ -96,6 +96,16 @@ jobs:
         # The same `go install ...@latest` lines the generated README tells a
         # user to run, so CI sets the project up the way its own README says
         # to. GOPATH/bin is added by name rather than trusted to be on PATH.
+        #
+        # GOTOOLCHAIN is `auto` for this step only, and that is not a
+        # loosening. setup-go pins it to `local` at go-boot's floor, and buf
+        # v1.72.0 needs a newer Go than the floor, so `local` fails here on a
+        # machine no user has: Go ships `auto` by default, so a real user
+        # running the README's line downloads the toolchain buf asks for and
+        # never sees this. The step below keeps the job's `local` pin, which
+        # is what proves the generated projects build on the floor itself.
+        env:
+          GOTOOLCHAIN: auto
         run: |
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           go install github.com/bufbuild/buf/cmd/buf@latest
