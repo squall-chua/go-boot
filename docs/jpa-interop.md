@@ -57,6 +57,14 @@ Write goose migrations that follow the table below, then prove it in CI:
 It does put a JVM in your CI. That is fine for a repo that already has one. If you have no JVM,
 you have no JPA service either, and this page does not apply to you.
 
+The Scaffold behind `goboot new` writes the first of those migrations for you, already
+following the table. In `migrations/00001_greeting.sql`, the `version` column is the one
+commented-out SQL line, placed so that uncommenting it leaves valid SQL. Uncomment it when the
+JPA entity carries `@Version`, and the rule at the top of this page starts applying to every Go
+`UPDATE` to that table. Until then `dbtest.LintJPAConventions` below fails on that migration —
+a table with no `version` column is one of the three things it reports — and the `README.md` it
+writes alongside says the same.
+
 ## The convention
 
 | The JPA side writes | The column it creates | What the Go side does |
