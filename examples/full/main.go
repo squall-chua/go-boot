@@ -22,8 +22,6 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // the user brings their own driver
 
 	"github.com/squall-chua/go-boot"
-	"github.com/squall-chua/go-boot/grpc"
-	"github.com/squall-chua/go-boot/internal/gen/greet/v1/greetv1connect"
 	"github.com/squall-chua/go-boot/preset/traced"
 )
 
@@ -65,12 +63,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	svc := &greeter{db: app.DB, greeting: cfg.Greeting}
-	app.Web.Handle("GET /hello/{name}", httpGreet(svc))
-	// grpc.DefaultOptions is here and not inside the Preset, in both forms:
-	// the mount names the user's own generated package. Leave it off and the
-	// error sanitiser goes with it.
-	app.Web.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+	addRoutes(app.Web, app.DB, app.Log, cfg)
 
 	return app.Run(ctx)
 }

@@ -6,6 +6,11 @@
 // at a placeholder, so point it at a real one — or at a loopback issuer, which
 // is the only shape plain http is accepted for.
 //
+// The layout is the one `goboot new` writes: two features under internal/, each
+// owning its own routes, and routes.go beside this file listing them. The scope
+// check sits inside the guarded feature's Routes, next to the handler it
+// protects. See ADR 0015.
+//
 // CI builds it through go build ./..., so the wiring in README.md cannot rot.
 // That matters more here than in the other examples, because two of the lines
 // below have a trap in them and the compiler is what holds them:
@@ -81,11 +86,9 @@ func run(ctx context.Context) error {
 	act.MountOn(operators{srv, security.RequireScope("actuator")})
 	app.Add(act, srv)
 
-	// An open route: no wrapper, so no token is needed.
-	srv.Handle("GET /hello/{name}", http.HandlerFunc(hello))
-	// A guarded one. The wrapper is at the mount, next to the handler it
-	// protects, because nothing else can see whether it is missing.
-	srv.Handle("POST /orders", security.RequireScope("orders:write")(http.HandlerFunc(orders)))
+	// One open route and one guarded one. Which is which is decided inside
+	// each feature's Routes, at the mount.
+	addRoutes(srv)
 
 	return app.Run(ctx)
 }
@@ -116,20 +119,4 @@ func isProbe(pattern string) bool {
 	p := pattern[strings.LastIndex(pattern, " ")+1:]
 	return p == "/livez" || p == "/readyz" ||
 		p == "/actuator/livez" || p == "/actuator/readyz"
-}
-
-func hello(w http.ResponseWriter, r *http.Request) {
-	web.WriteJSON(w, http.StatusOK, map[string]string{"hello": r.PathValue("name")})
-}
-
-// orders reads the Principal the token became. RequireScope has already
-// answered 401 and 403, so by here there is one.
-func orders(w http.ResponseWriter, r *http.Request) {
-	p, ok := security.PrincipalFrom(r.Context())
-	if !ok {
-		web.WriteProblem(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
-	goboot.LoggerFrom(r.Context()).Info("order accepted", "sub", p.Subject)
-	web.WriteJSON(w, http.StatusAccepted, map[string]string{"acceptedFor": p.Subject})
 }

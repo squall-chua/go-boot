@@ -1,9 +1,13 @@
-// Command http-only is the smallest useful go-boot service: one Transport,
-// the default middleware, and nothing else.
+// Command http-only is the smallest useful go-boot service: one Transport, the
+// default middleware, and nothing else.
 //
 // There is no Preset for this shape. One was written and deleted, because it
 // came out LONGER than the body it replaced. The short path is short because
 // the library is small.
+//
+// The layout is the one `goboot new` writes, minus the parts a service with no
+// database has no use for: the feature is a package under internal/, its routes
+// live with it, and routes.go below lists the features. See ADR 0015.
 //
 // CI builds it through go build ./..., so the example cannot rot.
 package main
@@ -11,7 +15,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"os"
 
 	"github.com/squall-chua/go-boot"
@@ -37,17 +40,7 @@ func run(ctx context.Context) error {
 	srv.Use(web.DefaultMiddleware(app.Log)...)
 	app.Add(srv)
 
-	srv.Handle("GET /hello/{name}", http.HandlerFunc(hello))
+	addRoutes(srv)
 
 	return app.Run(ctx)
-}
-
-// hello stands in for the Service Layer. It is an ordinary http.HandlerFunc:
-// go-boot has no handler type of its own, so everything written for net/http
-// works here unchanged.
-func hello(w http.ResponseWriter, r *http.Request) {
-	// The logger is already tagged with this request's ID, so this line and
-	// the access-log line for the same request join up.
-	goboot.LoggerFrom(r.Context()).Info("greeting", "name", r.PathValue("name"))
-	web.WriteJSON(w, http.StatusOK, map[string]string{"hello": r.PathValue("name")})
 }

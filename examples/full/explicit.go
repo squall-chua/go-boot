@@ -21,8 +21,6 @@ import (
 	"github.com/squall-chua/go-boot"
 	"github.com/squall-chua/go-boot/actuator"
 	"github.com/squall-chua/go-boot/db"
-	"github.com/squall-chua/go-boot/grpc"
-	"github.com/squall-chua/go-boot/internal/gen/greet/v1/greetv1connect"
 	"github.com/squall-chua/go-boot/trace"
 	"github.com/squall-chua/go-boot/web"
 	"github.com/squall-chua/go-boot/web/metrics"
@@ -62,10 +60,10 @@ func runExplicit(ctx context.Context) error {
 	act.MountOn(srv)                    // forget this and there is no /readyz
 	app.Add(act, tracer, database, srv) // the order here is ignored; Tier decides
 
-	svc := &greeter{db: pool, greeting: cfg.Greeting}
-	srv.Handle("GET /hello/{name}", httpGreet(svc))
 	// Identical in both forms, and so is the pgx blank import in main.go.
-	srv.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+	// Everything above this line is the wiring; everything the service DOES is
+	// behind this one call.
+	addRoutes(srv, pool, app.Log, cfg)
 
 	return app.Run(ctx)
 }

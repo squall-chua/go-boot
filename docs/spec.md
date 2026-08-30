@@ -1061,9 +1061,9 @@ type:
 > both errors rather than promise the second one.
 
 ```go
-type grpcGreeter struct{ svc *greeter }
+type server struct{ svc *greeting.Service }
 
-func (g *grpcGreeter) Greet(ctx context.Context, req *connect.Request[greetv1.GreetRequest]) (*connect.Response[greetv1.GreetResponse], error) {
+func (g *server) Greet(ctx context.Context, req *connect.Request[greetv1.GreetRequest]) (*connect.Response[greetv1.GreetResponse], error) {
 	out, err := g.svc.Greet(ctx, req.Msg.GetName())
 	if err != nil {
 		return nil, err // bare: the sanitiser owns what the caller sees
@@ -1136,8 +1136,8 @@ func Options() []connect.HandlerOption
 
 ```go
 opts := metrics.Options()
-srv.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc},
-	append(grpc.DefaultOptions(app.Log), opts...)...))
+srv.Handle(greetv1connect.NewGreetServiceHandler(&server{svc: s},
+	append(grpc.DefaultOptions(log), opts...)...))
 ```
 
 Two metrics, both labelled `procedure` and `code`:
@@ -1930,11 +1930,17 @@ func run(ctx context.Context) error {
 	srv.Use(web.DefaultMiddleware(app.Log)...)
 	app.Add(srv)
 
-	srv.Handle("GET /hello/{name}", http.HandlerFunc(hello))
+	addRoutes(srv)
 
 	return app.Run(ctx)
 }
 ```
+
+`addRoutes` is `routes.go`, and the one feature it lists is `internal/hello/`. That is the layout
+[15](#15-the-scaffold-cli) writes, minus the parts a service with no database has no use for, and it
+is what keeps `run` free of every feature name. Restructured by
+[ADR `0015`](adr/0015-the-scaffold-writes-patterns-go-boot-refuses.md); the wiring above — the part
+this section is about — did not move.
 
 ### 6.2 `http-actuator-config` — the realistic default
 
@@ -1974,7 +1980,7 @@ func run(ctx context.Context) error {
 	act.MountOn(srv)
 	app.Add(act, srv)
 
-	srv.Handle("GET /hello/{name}", greet(cfg.Greeting))
+	addRoutes(srv, cfg)
 
 	return app.Run(ctx)
 }
@@ -2015,9 +2021,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	svc := &greeter{db: app.DB, greeting: cfg.Greeting}
-	app.Web.Handle("GET /hello/{name}", httpGreet(svc))
-	app.Web.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+	addRoutes(app.Web, app.DB, app.Log, cfg)
 
 	return app.Run(ctx)
 }
@@ -2058,30 +2062,41 @@ func runExplicit(ctx context.Context) error {
 	act.MountOn(srv)
 	app.Add(act, tracer, database, srv)
 
-	svc := &greeter{db: pool, greeting: cfg.Greeting}
-	srv.Handle("GET /hello/{name}", httpGreet(svc))
-	srv.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+	addRoutes(srv, pool, app.Log, cfg)
 
 	return app.Run(ctx)
 }
 ```
 
-Note the two lines that are **identical in both forms**:
+Note the two things that are **identical in both forms**:
 
 - `_ "github.com/jackc/pgx/v5/stdlib"` — the user brings their own driver.
-- `grpc.DefaultOptions(app.Log)` — the mount names the user's generated package, so it cannot move
-  into a Preset. See [9. Known gaps](#9-known-gaps-in-v1).
+- `addRoutes` — the same call with the same four arguments, so the two forms differ in wiring and in
+  nothing else. `grpc.DefaultOptions(app.Log)` sits inside it, in `internal/greeting/rpc`, because
+  the mount names the user's generated package and so cannot move into a Preset. See
+  [9. Known gaps](#9-known-gaps-in-v1).
 
-The Service Layer is shared by both forms and knows nothing about HTTP or gRPC:
+The Service Layer is shared by both forms and by both Transports, and knows nothing about HTTP,
+gRPC or SQL. It lives in `internal/greeting/`, with the `Repository` interface it consumes declared
+beside it rather than in the `entity` package that implements it:
 
 ```go
-type greeter struct {
-	db       *sql.DB
-	greeting string
+type Repository interface {
+	ByLang(ctx context.Context, lang string) (entity.Greeting, error)
 }
 
-func (g *greeter) Greet(ctx context.Context, name string) (string, error)
+type Service struct {
+	repo     Repository
+	fallback string
+}
+
+func (s *Service) Greet(ctx context.Context, name string) (string, error)
 ```
+
+> **Restructured by [ADR `0015`](adr/0015-the-scaffold-writes-patterns-go-boot-refuses.md).** This
+> section printed a flat `greeter` in `service.go` until the four examples were brought onto the
+> layout [15](#15-the-scaffold-cli) writes. The wiring above — the part this section is about — did
+> not move; what moved is where the behaviour behind it lives.
 
 ### Measured weight of the three variants
 
@@ -2090,17 +2105,38 @@ go-boot itself.
 
 | binary | modules | bytes | stripped |
 |---|---:|---:|---:|
-| `examples/http-only` | 2 | 6,807,817 | 6.49 MB |
-| `examples/http-actuator-config` | 11 | 11,628,809 | 11.09 MB |
-| `examples/full` | 41 | 22,896,905 | 21.84 MB |
+| `examples/http-only` | 2 | 6,836,489 | 6.52 MB |
+| `examples/http-actuator-config` | 11 | 11,632,905 | 11.09 MB |
+| `examples/full` | 41 | 22,909,193 | 21.85 MB |
 
 > **A fourth binary, added by [#34](https://github.com/squall-chua/go-boot/issues/34).**
 > `examples/http-secure` is not a variant of the `main.go` this section is about — it is
 > `http-actuator-config` plus the Security Starter — so it gets no row above. Measured the same way:
-> **12 modules and 12,218,633 bytes**, against `http-actuator-config`'s 11 and 11,628,809. That is
-> **+1 module and +589,824 bytes** for security headers, CORS, JWT verification and a guarded
+> **12 modules and 12,230,921 bytes**, against `http-actuator-config`'s 11 and 11,632,905. That is
+> **+1 module and +598,016 bytes** for security headers, CORS, JWT verification and a guarded
 > Actuator. See [4.7](#47-gobootsecurity--the-security-starter), which carries the same measurement
 > taken from the lighter end.
+
+> **Re-measured for [ADR `0015`](adr/0015-the-scaffold-writes-patterns-go-boot-refuses.md),** which
+> put the four examples on the layout the Scaffold writes. Every row moved and **no module count
+> did**, which is the number that mattered: the new shape is packages, not dependencies. The four
+> deltas, on Go 1.26.3, against binaries built from the commit before the change:
+>
+> | binary | before | after | delta |
+> |---|---:|---:|---:|
+> | `examples/http-only` | 6,807,817 | 6,836,489 | +28,672 |
+> | `examples/http-actuator-config` | 11,628,809 | 11,632,905 | +4,096 |
+> | `examples/full` | 22,896,905 | 22,909,193 | +12,288 |
+> | `examples/http-secure` | 12,218,633 | 12,230,921 | +12,288 |
+>
+> **The measurements taken elsewhere in this document against these binaries were NOT re-taken**, and
+> they still quote the pre-restructure figure — [4.6](#46-goboottrace) and
+> [4.7](#47-gobootsecurity--the-security-starter) against `http-only`, and
+> [7](#7-dependencies-and-the-ticket-that-chose-each-one)'s Cache Starter against
+> `http-actuator-config`. Each of those is a **delta** between one binary and the same binary plus a
+> dependency, and no dependency moved here, so every delta still holds. Only the base each is
+> measured from is one restructure old. Re-taking them means rebuilding four variants that exist
+> nowhere in the repository, so they are left as the measurements they were, dated by their tickets.
 
 > **Re-measured by [#46](https://github.com/squall-chua/go-boot/issues/46).** The `examples/full`
 > row moved for two reasons at once, and the release note should name both, because the row is one
@@ -3528,8 +3564,8 @@ what has changed in it. Everything after the first run is `go get -u`, which is 
 | `proto/greet/v1/greet.proto` | `-grpc` | one sample service, unary and server-streaming |
 | `buf.yaml`, `buf.gen.yaml` | `-grpc` | what `buf generate` reads. **No Makefile** — go-boot does not own the user's build tool, so the commands go in a comment |
 
-**Six files, or nine.** The `-grpc` project does not compile until `buf generate` has run once, and
-its `README.md` and the doc comment at the top of its `main.go` both say so, because a project that
+**Thirteen files, or seventeen.** The `-grpc` project does not compile until `buf generate` has run
+once, and its `README.md` and the doc comment at the top of its `main.go` both say so, because a project that
 does not build on the first `go build` has to explain itself in the project rather than in the tool
 that wrote it.
 

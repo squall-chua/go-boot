@@ -13,6 +13,10 @@
 //	curl localhost:8080/actuator/metrics
 //	curl -X PUT localhost:8080/actuator/loglevel -d '{"level":"DEBUG"}'
 //
+// The layout is the one `goboot new` writes, minus the parts a service with no
+// database has no use for: the feature is a package under internal/, its routes
+// live with it, and routes.go beside this file lists the features. See ADR 0015.
+//
 // CI builds it through go build ./..., so the example cannot rot.
 package main
 
@@ -20,7 +24,6 @@ import (
 	"context"
 	"embed"
 	"log/slog"
-	"net/http"
 	"os"
 
 	"github.com/squall-chua/go-boot"
@@ -70,18 +73,7 @@ func run(ctx context.Context) error {
 	act.MountOn(srv)
 	app.Add(act, srv)
 
-	srv.Handle("GET /hello/{name}", greet(cfg.Greeting))
+	addRoutes(srv, cfg)
 
 	return app.Run(ctx)
-}
-
-// greet stands in for the Service Layer. It reads the service's own config
-// key, which go-boot loaded in the same pass as its own.
-func greet(greeting string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("name")
-		// Visible after PUT /actuator/loglevel, with no restart.
-		goboot.LoggerFrom(r.Context()).Debug("greeting", "name", name)
-		web.WriteJSON(w, http.StatusOK, map[string]string{"greeting": greeting, "name": name})
-	})
 }

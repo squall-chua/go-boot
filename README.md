@@ -33,7 +33,9 @@ stale on you.
 
 ### 1. The smallest service — two minutes
 
-One Transport, the default middleware, nothing else.
+One Transport, the default middleware, nothing else. The routes are in
+`routes.go` and the one feature is a package under `internal/`, which is the layout the Scaffold
+writes — `run` names no feature and never grows.
 
 <!-- from: examples/http-only/main.go -->
 ```go
@@ -49,7 +51,7 @@ func run(ctx context.Context) error {
 	srv.Use(web.DefaultMiddleware(app.Log)...)
 	app.Add(srv)
 
-	srv.Handle("GET /hello/{name}", http.HandlerFunc(hello))
+	addRoutes(srv)
 
 	return app.Run(ctx)
 }
@@ -95,7 +97,7 @@ func run(ctx context.Context) error {
 	act.MountOn(srv)
 	app.Add(act, srv)
 
-	srv.Handle("GET /hello/{name}", greet(cfg.Greeting))
+	addRoutes(srv, cfg)
 
 	return app.Run(ctx)
 }
@@ -129,16 +131,16 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	svc := &greeter{db: app.DB, greeting: cfg.Greeting}
-	app.Web.Handle("GET /hello/{name}", httpGreet(svc))
-	// grpc.DefaultOptions is here and not inside the Preset, in both forms:
-	// the mount names the user's own generated package. Leave it off and the
-	// error sanitiser goes with it.
-	app.Web.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+	addRoutes(app.Web, app.DB, app.Log, cfg)
 
 	return app.Run(ctx)
 }
 ```
+
+`addRoutes` is `routes.go`, and both forms call it with the same four arguments — so the two forms
+differ in wiring and in nothing else. The feature behind it is `internal/greeting/`: the `Repository`
+interface beside the Service Layer that uses it, `entity/` for the Entity and its SQL, `rest/` for
+HTTP and `rpc/` for gRPC.
 
 This stop needs a PostgreSQL, because it runs migrations and opens a pool. `examples/full/app.yaml`
 points `db.dsn` at a throwaway one on `localhost:5432`; send a real password in `ORDERS_DB__DSN`
@@ -177,7 +179,7 @@ go run . migrate   # needs the PostgreSQL named in app.yaml
 go run .
 ```
 
-It writes twelve files: a `main.go` with one call to `preset.Full` and the `orders migrate`
+It writes thirteen files: a `main.go` with one call to `preset.Full` and the `orders migrate`
 subcommand, a `routes.go` listing the features, and `internal/greeting/` — one feature as a domain
 package (the `Repository` interface beside the Service Layer that uses it, and a test driving that
 Service against a fake Repository) plus one sub-package per adapter: `entity/` for the Entity and
@@ -190,7 +192,8 @@ and defines no Repository or Entity ([ADR 0009](docs/adr/0009-no-repository-abst
 its Transport takes a plain `http.Handler` and defines no handler signature
 ([ADR 0004](docs/adr/0004-http-handler-boundary.md)). Keeping both out of the library is exactly
 what lets the generated project put `sqlc`, `ent` or `gorm` behind that interface, and keep every
-`net/http` middleware working unchanged. Add
+`net/http` middleware working unchanged. Why a Scaffold may write what the library refuses is
+[ADR 0015](docs/adr/0015-the-scaffold-writes-patterns-go-boot-refuses.md). Add
 `-grpc` and it writes four more — `buf.yaml`, `buf.gen.yaml`, a sample `.proto` and an `rpc/`
 package holding the adapter type and its own mount, a sibling of `rest/` — and then `buf generate`
 has to run before the project compiles.
@@ -320,13 +323,23 @@ security:
 	srv.Use(append(web.DefaultMiddleware(app.Log), sec...)...)
 ```
 
-<!-- from: examples/http-secure/main.go -->
+Each feature mounts its own routes, so the wrapper ends up beside the handler it protects. An open
+route has none, and needs no token:
+
+<!-- from: examples/http-secure/internal/hello/rest/rest.go -->
 ```go
-	// An open route: no wrapper, so no token is needed.
-	srv.Handle("GET /hello/{name}", http.HandlerFunc(hello))
-	// A guarded one. The wrapper is at the mount, next to the handler it
-	// protects, because nothing else can see whether it is missing.
-	srv.Handle("POST /orders", security.RequireScope("orders:write")(http.HandlerFunc(orders)))
+func Routes(srv *web.Server, s *hello.Service) {
+	srv.Handle("GET /hello/{name}", transport.Handle(bindHello, sayHello(s)))
+}
+```
+
+A guarded one carries it at the mount, because nothing else can see whether it is missing:
+
+<!-- from: examples/http-secure/internal/orders/rest/rest.go -->
+```go
+func Routes(srv *web.Server, s *orders.Service) {
+	srv.Handle("POST /orders", security.RequireScope("orders:write")(create(s)))
+}
 ```
 
 `DefaultMiddleware` is a slice you can print and edit. `Headers` is always in it; `CORS` joins once
@@ -360,13 +373,13 @@ told none of it, and the token itself is never logged.
 
 Read the Principal in a handler:
 
-<!-- from: examples/http-secure/main.go -->
+<!-- from: examples/http-secure/internal/orders/rest/rest.go -->
 ```go
-	p, ok := security.PrincipalFrom(r.Context())
-	if !ok {
-		web.WriteProblem(w, http.StatusUnauthorized, "authentication required")
-		return
-	}
+		p, ok := security.PrincipalFrom(r.Context())
+		if !ok {
+			web.WriteProblem(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
 ```
 
 `Principal` carries `Subject`, `Issuer`, `Scopes` and the whole claim map. `Scopes` reads `scope`
@@ -454,9 +467,9 @@ there is no pattern syntax, because a wildcard in the middle of an origin is how
 every response, allowed or not, so a shared cache cannot serve one origin's answer to another.
 
 **What it costs.** One module, `github.com/golang-jwt/jwt/v5`, with no transitive dependencies of its
-own. Wiring the whole of `DefaultMiddleware` plus one guarded route into `examples/http-only` takes
-that binary from 6,807,817 to 7,516,425 bytes stripped: **+708,608 bytes**, nearly all of it stdlib
-crypto that stops being dead code once something verifies a signature.
+own. Wiring the whole of `DefaultMiddleware` plus one guarded route into a plain HTTP-only service
+takes that binary from 6,807,817 to 7,516,425 bytes stripped: **+708,608 bytes**, nearly all of it
+stdlib crypto that stops being dead code once something verifies a signature.
 
 ### Guarding the Actuator
 
@@ -547,9 +560,9 @@ connect-go's generated constructor returns `(string, http.Handler)`, which is ex
 `web.Server.Handle`, so a connect service mounts on the HTTP listener with no adapter and no second
 port:
 
-<!-- from: examples/full/explicit.go -->
+<!-- from: examples/full/internal/greeting/rpc/rpc.go -->
 ```go
-srv.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+	srv.Handle(greetv1connect.NewGreetServiceHandler(&server{svc: s}, grpc.DefaultOptions(log)...))
 ```
 
 One cleartext port answers gRPC, gRPC-Web, Connect JSON and plain REST at once. `web` turns on
@@ -573,11 +586,11 @@ at all — only that it cannot choose between two `Greet` methods.
 A separate thin type — the gRPC Transport, in this repo's language — is the way out, and it is
 four lines:
 
-<!-- from: examples/full/service.go -->
+<!-- from: examples/full/internal/greeting/rpc/rpc.go -->
 ```go
-type grpcGreeter struct{ svc *greeter }
+type server struct{ svc *greeting.Service }
 
-func (g *grpcGreeter) Greet(ctx context.Context, req *connect.Request[greetv1.GreetRequest]) (*connect.Response[greetv1.GreetResponse], error) {
+func (g *server) Greet(ctx context.Context, req *connect.Request[greetv1.GreetRequest]) (*connect.Response[greetv1.GreetResponse], error) {
 	out, err := g.svc.Greet(ctx, req.Msg.GetName())
 	if err != nil {
 		return nil, err // bare: the sanitiser owns what the caller sees
@@ -586,7 +599,7 @@ func (g *grpcGreeter) Greet(ctx context.Context, req *connect.Request[greetv1.Gr
 }
 ```
 
-The Service Layer stays free of connect, and both Transports call the same `greeter`.
+The Service Layer stays free of connect, and both Transports call the same `greeting.Service`.
 
 **Return the error bare.** `connect.NewError(connect.CodeInternal, err)` looks tidier and it is the
 leak: it makes `err`'s own text the message your caller receives, and the sanitiser below passes a
@@ -681,8 +694,8 @@ A third package, `goboot/grpc/metrics`, opt-in by import like the two above. It 
 of my RPCs failed, and how slow are they" from the endpoint that already answers everything else:
 
 ```go
-srv.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc},
-	append(grpc.DefaultOptions(app.Log), metrics.Options()...)...))
+srv.Handle(greetv1connect.NewGreetServiceHandler(&server{svc: s},
+	append(grpc.DefaultOptions(log), metrics.Options()...)...))
 ```
 
 Two metrics, both labelled `procedure` and `code`, both registered on the Prometheus default
@@ -946,8 +959,9 @@ type config struct {
 }
 ```
 
-**`grpc.DefaultOptions(app.Log)` stays in `main` too, in both forms**, because the mount names your
-own generated package and a Preset can never see it. So **the Preset does not protect you from
+**`grpc.DefaultOptions` stays in your own code too, in both forms** — `examples/full` keeps it in
+`internal/greeting/rpc`, beside the mount — because the mount names your own generated package and a
+Preset can never see it. So **the Preset does not protect you from
 forgetting the error-sanitising interceptor**: leave those options off and a bare `error` reaches
 the caller verbatim, password and all. The same is true of the `_ "github.com/jackc/pgx/v5/stdlib"`
 blank import — you bring your own driver in both forms.
