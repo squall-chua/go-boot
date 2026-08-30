@@ -177,10 +177,23 @@ go run . migrate   # needs the PostgreSQL named in app.yaml
 go run .
 ```
 
-It writes six files: a `main.go` with one call to `preset.Full` and the `orders migrate`
-subcommand, a `service.go`, an `app.yaml`, one goose migration, a `README.md` and a `go.mod`. Add
-`-grpc` and it writes three more — `buf.yaml`, `buf.gen.yaml` and a sample `.proto` — plus the gRPC
-adapter type, and then `buf generate` has to run before the project compiles.
+It writes twelve files: a `main.go` with one call to `preset.Full` and the `orders migrate`
+subcommand, a `routes.go` listing the features, and `internal/greeting/` — one feature as a domain
+package (the `Repository` interface beside the Service Layer that uses it, and a test driving that
+Service against a fake Repository) plus one sub-package per adapter: `entity/` for the Entity and
+the SQL that loads it, `rest/` for HTTP. Then an `internal/transport/` adapter and its test, an `app.yaml`, one
+goose migration, a `README.md` and a `go.mod`. Feature two is a sibling of `internal/greeting/` and
+two more lines in `addRoutes`, so `serve()` never grows.
+
+Those three patterns are the **application's**, not go-boot's. go-boot hands back a plain `*sql.DB`
+and defines no Repository or Entity ([ADR 0009](docs/adr/0009-no-repository-abstraction.md)), and
+its Transport takes a plain `http.Handler` and defines no handler signature
+([ADR 0004](docs/adr/0004-http-handler-boundary.md)). Keeping both out of the library is exactly
+what lets the generated project put `sqlc`, `ent` or `gorm` behind that interface, and keep every
+`net/http` middleware working unchanged. Add
+`-grpc` and it writes four more — `buf.yaml`, `buf.gen.yaml`, a sample `.proto` and an `rpc/`
+package holding the adapter type and its own mount, a sibling of `rest/` — and then `buf generate`
+has to run before the project compiles.
 
 **One flag, and that is on purpose.** A flag exists only where it changes which *files* are
 written. Everything else you might want different — tracing, the Actuator whitelist, the database —

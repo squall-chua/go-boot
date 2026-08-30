@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -15,7 +17,7 @@ import (
 // on. The two projects under scaffold/ are compiled by go build ./..., so the
 // only thing a copy can break is the substitution: a replacement that lands
 // outside a string literal, a comment or an import path leaves Go that no
-// longer parses.
+// longer parses — or, short of that, Go that no longer sorts.
 func TestWriteProducesAProjectThatParses(t *testing.T) {
 	for _, grpc := range []bool{false, true} {
 		dir := t.TempDir()
@@ -25,6 +27,24 @@ func TestWriteProducesAProjectThatParses(t *testing.T) {
 		for _, p := range goFiles(t, filepath.Join(dir, "orders")) {
 			if _, err := parser.ParseFile(token.NewFileSet(), p, nil, parser.SkipObjectResolution); err != nil {
 				t.Errorf("grpc=%v: %v", grpc, err)
+				continue
+			}
+			// Parsing is not enough. The substitutions rewrite IMPORT PATHS,
+			// and a rewritten path sorts differently from the one written
+			// here — so a project that parses can still land unsorted, and
+			// the user's first `gofmt -l` reports files they never wrote.
+			// Keeping each rewritten import in a group of its own is what
+			// avoids that, and this is the check that says so.
+			src, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := format.Source(src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(src, want) {
+				t.Errorf("grpc=%v: %s is not gofmt-clean as written", grpc, p)
 			}
 		}
 	}
@@ -43,7 +63,7 @@ func TestWriteLeavesNoPlaceholderBehind(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, bad := range []string{"myservice", "MYSERVICE_", "squall-chua/go-boot/internal/gen"} {
+		for _, bad := range []string{"myservice", "MYSERVICE_", "squall-chua/go-boot/internal/gen", "cmd/goboot/scaffold"} {
 			if strings.Contains(string(b), bad) {
 				t.Errorf("%s still contains %q", p, bad)
 			}
@@ -54,8 +74,13 @@ func TestWriteLeavesNoPlaceholderBehind(t *testing.T) {
 // TestTheGeneratedFileSet is the whole promise of "what it writes", and the
 // -grpc flag's whole reason for existing: it changes which FILES appear.
 func TestTheGeneratedFileSet(t *testing.T) {
-	base := []string{"README.md", "app.yaml", "go.mod", "main.go", "migrations/00001_greeting.sql", "service.go"}
-	grpcOnly := []string{"buf.gen.yaml", "buf.yaml", "proto/greet/v1/greet.proto"}
+	base := []string{"README.md", "app.yaml", "go.mod",
+		"internal/greeting/greeting.go", "internal/greeting/greeting_test.go",
+		"internal/greeting/entity/entity.go", "internal/greeting/entity/postgres.go",
+		"internal/greeting/rest/rest.go",
+		"internal/transport/transport.go", "internal/transport/transport_test.go",
+		"main.go", "migrations/00001_greeting.sql", "routes.go"}
+	grpcOnly := []string{"buf.gen.yaml", "buf.yaml", "internal/greeting/rpc/rpc.go", "proto/greet/v1/greet.proto"}
 
 	for _, tc := range []struct {
 		grpc bool
@@ -97,12 +122,16 @@ func TestTheGeneratedFileSet(t *testing.T) {
 // of the pair and forgetting the other — and it is most of the duplication,
 // which byte equality alone would have left unchecked.
 func TestTheTwoProjectsShareWhatTheyShare(t *testing.T) {
-	for _, name := range []string{"app.yaml", "migrations/00001_greeting.sql"} {
+	for _, name := range []string{"app.yaml", "migrations/00001_greeting.sql",
+		"internal/greeting/greeting.go", "internal/greeting/greeting_test.go",
+		"internal/greeting/entity/entity.go", "internal/greeting/entity/postgres.go",
+		"internal/greeting/rest/rest.go",
+		"internal/transport/transport.go", "internal/transport/transport_test.go"} {
 		if a, b := readPair(t, name); a != b {
 			t.Errorf("scaffold/http/%s and scaffold/grpc/%s have drifted apart", name, name)
 		}
 	}
-	for _, name := range []string{"main.go", "service.go", "README.md"} {
+	for _, name := range []string{"main.go", "routes.go", "README.md"} {
 		a, b := readPair(t, name)
 		if line, ok := firstLineNotIn(a, b); !ok {
 			t.Errorf("scaffold/http/%s has a line scaffold/grpc/%s does not: %q", name, name, line)
@@ -112,15 +141,22 @@ func TestTheTwoProjectsShareWhatTheyShare(t *testing.T) {
 
 func readPair(t *testing.T, name string) (string, string) {
 	t.Helper()
-	a, err := scaffold.ReadFile("scaffold/http/" + name)
+	return readProject(t, "http", name), readProject(t, "grpc", name)
+}
+
+// readProject reads one project's file with its OWN feature-package import
+// prefix rewritten to a placeholder, which is the first substitution write
+// applies on copy. Without it the pair differs on the one line that names the
+// directory each project lives in — which is not drift, and is the only
+// difference the feature packages introduced.
+func readProject(t *testing.T, project, name string) string {
+	b, err := scaffold.ReadFile("scaffold/" + project + "/" + name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := scaffold.ReadFile("scaffold/grpc/" + name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(a), string(b)
+	return strings.ReplaceAll(string(b),
+		"github.com/squall-chua/go-boot/cmd/goboot/scaffold/"+project+"/internal/",
+		"<module>/internal/")
 }
 
 // firstLineNotIn reports the first non-blank line of a that is not in b at or

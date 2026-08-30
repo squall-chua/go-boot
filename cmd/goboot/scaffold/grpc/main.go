@@ -28,10 +28,7 @@ import (
 
 	"github.com/squall-chua/go-boot"
 	"github.com/squall-chua/go-boot/db"
-	"github.com/squall-chua/go-boot/grpc"
 	"github.com/squall-chua/go-boot/preset"
-
-	"github.com/squall-chua/go-boot/internal/gen/greet/v1/greetv1connect"
 )
 
 //go:embed app.yaml
@@ -69,12 +66,7 @@ func serve(ctx context.Context) error {
 		return err
 	}
 
-	svc := &greeter{db: app.DB, greeting: cfg.Greeting}
-	app.Web.Handle("GET /hello/{name}", httpGreet(svc))
-	// gRPC shares the HTTP listener, so there is no second port. The mount
-	// names your OWN generated package, which is why no Preset can wire it.
-	// Leave grpc.DefaultOptions off and the error sanitiser goes with it.
-	app.Web.Handle(greetv1connect.NewGreetServiceHandler(&grpcGreeter{svc}, grpc.DefaultOptions(app.Log)...))
+	addRoutes(app, cfg)
 
 	return app.Run(ctx)
 }

@@ -133,10 +133,19 @@ func write(parent, module string, grpc bool) (string, int, error) {
 		return name, 0, fmt.Errorf("%s already exists", dst)
 	}
 
-	// Three textual substitutions, and nothing that needs a parser. Every one
+	// Four textual substitutions, and nothing that needs a parser. Every one
 	// of them lands inside a string literal, a comment or an import path, so
 	// the project compiles before the copy and after it.
+	//
+	// The first is what lets a project have packages of its own. In THIS
+	// repository the feature packages sit at
+	// github.com/squall-chua/go-boot/cmd/goboot/scaffold/<project>/internal/...,
+	// because that is where they are and go build ./... compiles them there.
+	// In the copy they have to be <module>/internal/..., and rewriting the
+	// prefix is the whole of it: add internal/orders beside internal/greeting
+	// and it is carried over with no change here.
 	sub := strings.NewReplacer(
+		"github.com/squall-chua/go-boot/cmd/goboot/"+src+"/internal/", module+"/internal/",
 		"MYSERVICE_", envPrefix(name),
 		"myservice", name,
 		"github.com/squall-chua/go-boot/internal/gen", module+"/internal/gen",

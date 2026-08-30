@@ -62,8 +62,7 @@ func serve(ctx context.Context) error {
 		return err
 	}
 
-	svc := &greeter{db: app.DB, greeting: cfg.Greeting}
-	app.Web.Handle("GET /hello/{name}", httpGreet(svc))
+	addRoutes(app, cfg)
 
 	return app.Run(ctx)
 }

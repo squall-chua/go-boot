@@ -3519,7 +3519,9 @@ what has changed in it. Everything after the first run is `go get -u`, which is 
 |---|---|---|
 | `go.mod` | always | `module` and `go`, nothing else. `go mod tidy` fills in the requires |
 | `main.go` | always | the wiring, one call to `preset.Full`, and the `myservice migrate` subcommand |
-| `service.go` | always | the Service Layer, the HTTP shell over it, and with `-grpc` the adapter type |
+| `routes.go` | always | `addRoutes`, the list of FEATURES, two lines each. The routes themselves are in the feature package, so `serve()` never grows |
+| `internal/greeting/` | always | one feature, as a domain package plus one sub-package per adapter. `greeting.go` is the `Repository` **interface** and the Service Layer; `greeting_test.go` drives the Service against a fake Repository; `entity/` holds the Entity, `ErrNotFound` and the SQL that loads them, and is the only package that names a column; `rest/` holds the two DTOs, the bind, the handler and the routes, all private but `Routes`. With `-grpc`, an `rpc/` package joins them. Feature two is a SIBLING directory with the same three |
+| `internal/transport/` | always | `transport.Handle`, the application's OWN adapter: a handler takes a request DTO and returns a response DTO instead of `(w, r)`. go-boot ships nothing like it and ADR `0004` says why — this one lives in the user's module, and go-boot still only sees the `http.Handler` it returns |
 | `app.yaml` | always | the embedded defaults layer, with the DSN and the Actuator whitelist |
 | `migrations/00001_greeting.sql` | always | one goose migration, following [the schema convention](#3-the-schema-conventions-are-the-default-and-the-version-column-is-one-commented-line) |
 | `README.md` | always | how to run it, what each file is, and ADR `0007`'s deployment contract. `maxOpenConns: 10` is ten pods is in here; the metrics whitelist is a comment in `app.yaml`, beside the list it is about |
@@ -3597,7 +3599,7 @@ the same reason.
 
 **`TestTheTwoProjectsShareWhatTheyShare` is what keeps the pair together, and it took two goes to
 aim it right.** The first version asserted byte equality on `app.yaml` and the migration and skipped
-the three files that legitimately differ — which left `main.go`, `service.go` and `README.md`, most
+the files that legitimately differ — which left `main.go`, `routes.go` and `README.md`, most
 of the duplication, checked by nothing. It now asserts byte equality on the two files that must be
 identical, and on the other three that the HTTP file is a **subset**: every one of its lines present,
 in order, in the gRPC one. That is the drift that actually happens — editing one of a pair and
