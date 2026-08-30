@@ -3564,11 +3564,29 @@ rather than trusting it. **Proven to fail**, the way [8.1](#81-the-import-leak-c
 were: a fourth substitution that lands outside a literal fails the parse of every generated Go file,
 in both variants.
 
-`go.mod` is the one file generated rather than copied, for two reasons that are both about rot: a
-real `go.mod` in either directory would make that directory a nested module and take it out of
-`go build ./...`, and a pinned `go` directive would go stale the next time
-[the floor rises](#what-the-promise-does-not-cover). It is written from the toolchain running the
-command, which is at least go-boot's own floor because it built the binary.
+`go.mod` is the one file generated rather than copied, because a real `go.mod` in either directory
+would make that directory a nested module and take it out of `go build ./...` — which is the one
+check this whole design rests on. It holds `module` and `go` and nothing else; `go mod tidy` fills
+in the requires.
+
+**The `go` directive is go-boot's own floor, not the toolchain's, and the first version of this got
+it wrong.** Reading the running toolchain looked like the rot-proof answer — no pinned number to go
+stale — and it is the wrong value: a project scaffolded on Go 1.26.3 was written `go 1.26.3` while
+go-boot's floor was `1.25.7`, which drags every one of that user's teammates onto whatever Go the
+person who typed `goboot new` happened to have, for a reason go-boot does not have. Three
+behaviours, all measured:
+
+| what the Scaffold writes | what `go mod tidy` leaves |
+|---|---|
+| the toolchain's version, `go 1.26.3` | `go 1.26.3` — wrong, and sticky |
+| no `go` line at all | `go 1.26.3` — tidy fills in the toolchain's anyway, so omitting it fixes nothing |
+| go-boot's floor, `go 1.25.7` | `go 1.25.7`, and the project still builds on 1.26.3 |
+
+So the floor **is** a pinned constant in `cmd/goboot`, which is the thing this section otherwise
+avoids — and it is pinned safely, because `TestGoFloorMatchesTheModule` reads the module's own
+`go.mod` and fails when the two disagree. Proven the same way as everything else here: moving
+`go.mod` to `go 1.26.0` fails that test naming both numbers. A pin nothing checks is staleness; a
+pin a test checks is just a value with a second copy.
 
 **Two complete projects cost a duplicated `app.yaml` and migration, and that price is paid on
 purpose.** A project only compiles if the files its `//go:embed` lines name sit beside it, so the
@@ -3593,6 +3611,15 @@ must declare the same service as `proto/greet/v1/greet.proto`, streaming method 
 project stops compiling. That is the mechanism working rather than a limitation to route around: a
 sample proto that has drifted from the adapter type beside it is exactly the rot this design exists
 to prevent.
+
+**What CI does not check, said out loud.** `go build ./...` proves the two projects build and
+`TestWriteProducesAProjectThatParses` proves a copy is valid Go, but **nothing builds the copy**.
+For the HTTP project the gap is nearly empty, because no import path is rewritten there, so parsing
+is very close to compiling. It is the gRPC project where the gap is real — its `internal/gen` import
+path *is* rewritten — and that is exactly the project CI cannot build, because it needs `buf` and
+two plugins first. A cheap HTTP-only job would look like coverage and catch almost nothing, so it is
+not there. Closing this properly means putting `buf` in CI and building both, and that is a ticket
+rather than a line.
 
 **Neither is on the ten-minute path.** [13](#13-docs-and-examples) fixes that path at
 three example directories and forbids a fourth, and these are neither examples nor a tutorial —

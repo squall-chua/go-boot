@@ -25,9 +25,22 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
+
+// goFloor is go-boot's OWN minimum Go version, copied from the go.mod beside
+// this command. A generated project gets this rather than the version of the
+// toolchain that happened to run the Scaffold.
+//
+// Both halves of that were measured. Writing the toolchain's version pushes
+// every teammate onto whatever Go the person who typed `goboot new` had, for a
+// reason go-boot does not have. Writing no `go` line at all does not help
+// either: `go mod tidy` then fills in the toolchain's version anyway. An
+// explicit floor is the only thing that works, and it survives `go mod tidy`.
+//
+// It is a pinned constant, and TestGoFloorMatchesTheModule is what stops it
+// going stale: that test reads ../../go.mod and fails if the two disagree.
+const goFloor = "1.25.7"
 
 //go:embed scaffold
 var scaffold embed.FS
@@ -151,7 +164,7 @@ func write(parent, module string, grpc bool) (string, int, error) {
 	// `go mod tidy` fills in the requires.
 	n++
 	return name, n, os.WriteFile(filepath.Join(dst, "go.mod"),
-		[]byte("module "+module+"\n"+goLine()), 0o644)
+		[]byte("module "+module+"\n\ngo "+goFloor+"\n"), 0o644)
 }
 
 // envPrefix is the name goboot.Load reads environment overrides under.
@@ -168,19 +181,4 @@ func envPrefix(name string) string {
 		}
 	}, name)
 	return strings.ToUpper(clean) + "_"
-}
-
-// goLine is the `go` directive, read from the toolchain running this command,
-// which is at least go-boot's own floor because it built this binary. Reading
-// it beats pinning a number that goes stale the next time the floor rises.
-//
-// A toolchain that reports no version — a devel build — gets NO go line
-// rather than a guessed one, because `go mod tidy` is the very next step the
-// user runs and writes the right one itself.
-func goLine() string {
-	v := strings.TrimPrefix(strings.Fields(runtime.Version())[0], "go")
-	if v == "" || v[0] < '0' || v[0] > '9' {
-		return ""
-	}
-	return "\ngo " + v + "\n"
 }

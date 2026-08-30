@@ -171,6 +171,47 @@ func TestRunRejectsWhatIsNotAnInvocation(t *testing.T) {
 	}
 }
 
+// TestGoFloorMatchesTheModule is what lets goFloor be a constant. A pinned
+// number with nothing reading the source of truth is exactly the staleness
+// this design avoids everywhere else, so the pin is checked rather than
+// trusted: the generated go.mod must name go-boot's floor, not the toolchain
+// that ran the Scaffold.
+func TestGoFloorMatchesTheModule(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(line, "go "); ok {
+			want = strings.TrimSpace(rest)
+			break
+		}
+	}
+	if want == "" {
+		t.Fatal("../../go.mod has no go directive, so the floor cannot be checked at all")
+	}
+	if want != goFloor {
+		t.Errorf("goFloor is %q, but go-boot's go.mod says %q", goFloor, want)
+	}
+}
+
+// TestGeneratedGoModNamesTheFloor pins the file the constant exists for. A
+// project that names the toolchain's version drags every teammate onto it.
+func TestGeneratedGoModNamesTheFloor(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, err := write(dir, "github.com/acme/orders", false); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "orders", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(b), "module github.com/acme/orders\n\ngo "+goFloor+"\n"; got != want {
+		t.Errorf("go.mod is %q, want %q", got, want)
+	}
+}
+
 func TestServiceName(t *testing.T) {
 	for _, tc := range []struct{ module, want string }{
 		{"github.com/acme/orders", "orders"},
